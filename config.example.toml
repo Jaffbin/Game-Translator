@@ -1,0 +1,38 @@
+[translation]
+target_language = "zh-CN"
+
+[project]
+cache_db = ".cache/translation.db"
+
+[providers.mock]
+type = "mock"
+
+[providers.nvidia]
+type = "openai_compatible"
+base_url = "https://integrate.api.nvidia.com/v1/chat/completions"
+model = "meta/llama-3.1-8b-instruct"
+api_key_env = "NVIDIA_API_KEY"
+timeout_seconds = 60
+max_retries = 3
+retry_backoff_seconds = 1.5
+temperature = 0.2
+
+[providers.deepseek]
+type = "openai_compatible"
+base_url = "https://api.deepseek.com/v1/chat/completions"
+model = "deepseek-chat"
+api_key_env = "DEEPSEEK_API_KEY"
+timeout_seconds = 60
+max_retries = 3
+retry_backoff_seconds = 1.5
+temperature = 0.2
+
+[providers.openrouter]
+type = "openai_compatible"
+base_url = "https://openrouter.ai/api/v1/chat/completions"
+model = "openrouter/auto"
+api_key_env = "OPENROUTER_API_KEY"
+timeout_seconds = 60
+max_retries = 3
+retry_backoff_seconds = 1.5
+temperature = 0.2
