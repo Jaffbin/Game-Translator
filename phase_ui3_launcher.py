@@ -2,22 +2,16 @@ from __future__ import annotations
 
 import argparse
 import socket
+import subprocess
 import sys
 import threading
 import time
 from typing import Any, Dict, Optional, Tuple
 
-try:
-    import webview
-except ImportError:
-    sys.exit(
-        "pywebview is not installed.\n"
-        "Please run: pip install pywebview"
-    )
-
 import uvicorn
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
+from pydantic import BaseModel
 
 from agl.user_settings import (
     load_user_settings,
@@ -26,6 +20,11 @@ from agl.user_settings import (
     set_ui_mode,
 )
 from phase_ui1_simple import create_simple_app
+
+try:
+    import webview
+except ImportError:
+    webview = None
 
 
 # ----------------------------------------------------------------------
@@ -69,6 +68,42 @@ def wait_for_port(port: int, timeout_seconds: float = 15.0) -> bool:
 
 
 # ----------------------------------------------------------------------
+# Native folder dialog (no pywebview, no tkinter, thread-safe)
+# ----------------------------------------------------------------------
+
+def select_folder_native() -> str:
+    """
+    Open a native folder picker using PowerShell (Windows only).
+
+    Runs in a subprocess, so it is safe to call from any thread.
+    """
+    if not sys.platform.startswith("win"):
+        return ""
+
+    script = (
+        "Add-Type -AssemblyName System.Windows.Forms; "
+        "$d = New-Object System.Windows.Forms.FolderBrowserDialog; "
+        "$d.ShowNewFolderButton = $false; "
+        "$d.Description = 'Select game folder'; "
+        "if ($d.ShowDialog() -eq 'OK') { $d.SelectedPath } else { '' }"
+    )
+
+    try:
+        result = subprocess.run(
+            ["powershell", "-STA", "-NoProfile", "-Command", script],
+            capture_output=True,
+            text=True,
+            timeout=180,
+        )
+
+        return (result.stdout or "").strip()
+
+    except Exception as exc:
+        print(f"Folder dialog error: {exc}")
+        return ""
+
+
+# ----------------------------------------------------------------------
 # Portal page (first-run wizard + main menu)
 # ----------------------------------------------------------------------
 
@@ -98,23 +133,11 @@ PORTAL_PAGE = """<!doctype html>
       box-shadow: 0 18px 50px rgba(15, 23, 42, 0.16);
     }
 
-    h1 {
-      margin: 0 0 8px 0;
-      font-size: 34px;
-      color: #0f172a;
-    }
+    h1 { margin: 0 0 8px 0; font-size: 34px; color: #0f172a; }
 
-    p.sub {
-      margin: 0 0 22px 0;
-      color: #475569;
-      font-size: 15px;
-    }
+    p.sub { margin: 0 0 22px 0; color: #475569; font-size: 15px; }
 
-    .cards {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 18px;
-    }
+    .cards { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
 
     .card {
       border: 1px solid #cbd5e1;
@@ -131,25 +154,10 @@ PORTAL_PAGE = """<!doctype html>
       border-color: #93c5fd;
     }
 
-    .card h2 {
-      margin: 0 0 10px 0;
-      font-size: 21px;
-      color: #111827;
-    }
+    .card h2 { margin: 0 0 10px 0; font-size: 21px; color: #111827; }
+    .card p { margin: 0; color: #475569; font-size: 14px; line-height: 1.55; }
 
-    .card p {
-      margin: 0;
-      color: #475569;
-      font-size: 14px;
-      line-height: 1.55;
-    }
-
-    .actions {
-      display: flex;
-      gap: 12px;
-      flex-wrap: wrap;
-      margin-top: 20px;
-    }
+    .actions { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 20px; }
 
     button {
       border: 0;
@@ -163,12 +171,7 @@ PORTAL_PAGE = """<!doctype html>
     button.secondary { background: #475569; color: #fff; }
     button.ghost { background: #e2e8f0; color: #111827; }
 
-    .small {
-      margin-top: 18px;
-      color: #64748b;
-      font-size: 12px;
-    }
-
+    .small { margin-top: 18px; color: #64748b; font-size: 12px; }
     .hidden { display: none; }
 
     .badge {
@@ -245,9 +248,6 @@ PORTAL_PAGE = """<!doctype html>
   </div>
 
   <script>
-    let initialized = false;
-    let attempts = 0;
-
     function show(id) {
       document.getElementById("mode_select").classList.add("hidden");
       document.getElementById("home").classList.add("hidden");
@@ -260,25 +260,27 @@ PORTAL_PAGE = """<!doctype html>
       el.classList.remove("hidden");
     }
 
-    async function init() {
-      if (initialized) return;
+    async function api(url, method, body) {
+      const options = { method: method || "GET", headers: {} };
 
-      if (!window.pywebview || !window.pywebview.api) {
-        attempts += 1;
-
-        if (attempts > 20) {
-          showWarning("未检测到桌面环境。请通过 phase_ui3_launcher.py 启动本工具。");
-          return;
-        }
-
-        setTimeout(init, 300);
-        return;
+      if (body !== null && body !== undefined) {
+        options.headers["Content-Type"] = "application/json";
+        options.body = JSON.stringify(body);
       }
 
-      initialized = true;
+      const response = await fetch(url, options);
+      const data = await response.json().catch(() => ({}));
 
+      if (!response.ok) {
+        throw new Error(data.detail || response.statusText);
+      }
+
+      return data;
+    }
+
+    async function init() {
       try {
-        const settings = await window.pywebview.api.get_settings();
+        const settings = await api("/api/settings");
 
         if (!settings.first_run_completed) {
           show("mode_select");
@@ -299,7 +301,8 @@ PORTAL_PAGE = """<!doctype html>
 
     async function chooseMode(mode) {
       try {
-        await window.pywebview.api.choose_mode(mode);
+        const data = await api("/api/choose_mode", "POST", { mode: mode });
+        window.location.href = data.url;
       } catch (err) {
         alert("选择模式失败: " + err);
       }
@@ -307,7 +310,8 @@ PORTAL_PAGE = """<!doctype html>
 
     async function openMode(mode) {
       try {
-        await window.pywebview.api.open_mode(mode);
+        const data = await api("/api/open_mode", "POST", { mode: mode });
+        window.location.href = data.url;
       } catch (err) {
         alert("打开模式失败: " + err);
       }
@@ -315,17 +319,14 @@ PORTAL_PAGE = """<!doctype html>
 
     async function resetMode() {
       try {
-        await window.pywebview.api.reset_mode();
+        await api("/api/reset_mode", "POST");
         window.location.href = "/?r=" + Date.now();
       } catch (err) {
         alert("重置失败: " + err);
       }
     }
 
-    window.addEventListener("pywebviewready", init);
-    window.addEventListener("load", function () {
-      setTimeout(init, 300);
-    });
+    window.addEventListener("load", init);
   </script>
 </body>
 </html>
@@ -400,26 +401,25 @@ SIMPLE_DESKTOP_PAGE = """<!doctype html>
   <iframe id="frame" src="/"></iframe>
 
   <script>
+    const PORTAL_URL = "__PORTAL_URL__";
+
     function setStatus(message) {
       document.getElementById("status").textContent = message;
     }
 
     async function chooseFolder() {
       try {
-        if (!window.pywebview || !window.pywebview.api) {
-          setStatus("桌面对话框未就绪。");
-          return;
-        }
+        setStatus("正在打开文件夹选择窗口...");
 
-        const path = await window.pywebview.api.select_folder();
+        const response = await fetch("/api/select_folder", { method: "POST" });
+        const data = await response.json();
 
-        if (!path) {
+        if (!data.path) {
           setStatus("未选择文件夹。");
           return;
         }
 
-        const frame = document.getElementById("frame");
-        const doc = frame.contentDocument;
+        const doc = document.getElementById("frame").contentDocument;
 
         if (!doc) {
           setStatus("无法访问内部页面。");
@@ -433,27 +433,19 @@ SIMPLE_DESKTOP_PAGE = """<!doctype html>
           return;
         }
 
-        input.value = path;
-        setStatus("已选择：" + path);
+        input.value = data.path;
+        setStatus("已选择：" + data.path);
 
       } catch (err) {
         setStatus("选择文件夹失败：" + err);
       }
     }
 
-    async function goHome() {
-      try {
-        if (!window.pywebview || !window.pywebview.api) {
-          return;
-        }
-
-        await window.pywebview.api.go_home();
-      } catch (err) {
-        alert(String(err));
-      }
+    function goHome() {
+      window.location.href = PORTAL_URL;
     }
 
-    window.addEventListener("pywebviewready", function () {
+    window.addEventListener("load", function () {
       setStatus("简单模式就绪。");
     });
   </script>
@@ -474,16 +466,22 @@ MODE_DEFAULT_PORTS = {
 
 
 class ServiceManager:
-    def __init__(self):
+    def __init__(self, portal_url: str):
+        self.portal_url = portal_url
         self.services: Dict[str, Dict[str, Any]] = {}
 
     def _create_app(self, mode: str) -> Tuple[FastAPI, str]:
         if mode == "simple":
             app = create_simple_app()
+            portal_url = self.portal_url
 
             @app.get("/desktop", response_class=HTMLResponse)
             def simple_desktop_page() -> str:
-                return SIMPLE_DESKTOP_PAGE
+                return SIMPLE_DESKTOP_PAGE.replace("__PORTAL_URL__", portal_url)
+
+            @app.post("/api/select_folder")
+            def api_select_folder():
+                return {"path": select_folder_native()}
 
             return app, "/desktop"
 
@@ -538,18 +536,12 @@ class ServiceManager:
 
         server = uvicorn.Server(config)
 
-        thread = threading.Thread(
-            target=server.run,
-            daemon=True,
-        )
-
+        thread = threading.Thread(target=server.run, daemon=True)
         thread.start()
 
         if not wait_for_port(port):
             server.should_exit = True
-            raise RuntimeError(
-                f"Failed to start service for mode: {mode}"
-            )
+            raise RuntimeError(f"Failed to start service for mode: {mode}")
 
         url = f"http://127.0.0.1:{port}{suffix}"
 
@@ -579,102 +571,53 @@ class ServiceManager:
 
 
 # ----------------------------------------------------------------------
-# pywebview API
+# Portal app (HTTP API, no pywebview js_api)
 # ----------------------------------------------------------------------
 
-class LauncherApi:
-    def __init__(self):
-        self.window: Optional[Any] = None
-        self.services = ServiceManager()
-        self.portal_url: str = ""
-
-    def _load_url(self, url: str) -> None:
-        if self.window is not None:
-            self.window.load_url(url)
-
-    def get_settings(self) -> Dict[str, Any]:
-        return load_user_settings()
-
-    def choose_mode(self, mode: str) -> Dict[str, Any]:
-        if mode not in {"simple", "advanced"}:
-            raise ValueError("Invalid mode.")
-
-        set_ui_mode(mode)
-        url = self.services.start(mode)
-        self._load_url(url)
-
-        return {
-            "ok": True,
-            "mode": mode,
-            "url": url,
-        }
-
-    def open_mode(self, mode: str) -> Dict[str, Any]:
-        if mode not in {"simple", "advanced", "settings"}:
-            raise ValueError("Invalid mode.")
-
-        if mode in {"simple", "advanced"}:
-            settings = load_user_settings()
-            settings["ui_mode"] = mode
-            settings["first_run_completed"] = True
-
-            save_user_settings(settings)
-
-        url = self.services.start(mode)
-        self._load_url(url)
-
-        return {
-            "ok": True,
-            "mode": mode,
-            "url": url,
-        }
-
-    def go_home(self) -> Dict[str, Any]:
-        self._load_url(self.portal_url)
-
-        return {
-            "ok": True,
-        }
-
-    def reset_mode(self) -> Dict[str, Any]:
-        reset_ui_mode()
-
-        return {
-            "ok": True,
-        }
-
-    def select_folder(self) -> str:
-        if self.window is None:
-            return ""
-
-        try:
-            result = self.window.create_file_dialog(webview.FOLDER_DIALOG)
-
-            if not result:
-                return ""
-
-            if isinstance(result, (list, tuple)):
-                if len(result) == 0:
-                    return ""
-                return str(result[0])
-
-            return str(result)
-
-        except Exception as exc:
-            print(f"Folder dialog error: {exc}")
-            return ""
+class ModeRequest(BaseModel):
+    mode: str
 
 
-# ----------------------------------------------------------------------
-# Portal app
-# ----------------------------------------------------------------------
-
-def create_portal_app() -> FastAPI:
+def create_portal_app(services: ServiceManager) -> FastAPI:
     app = FastAPI(title="AutoGame Localizer Launcher")
 
     @app.get("/", response_class=HTMLResponse)
     def portal_page() -> str:
         return PORTAL_PAGE
+
+    @app.get("/api/settings")
+    def api_settings():
+        return load_user_settings()
+
+    @app.post("/api/choose_mode")
+    def api_choose_mode(body: ModeRequest):
+        if body.mode not in {"simple", "advanced"}:
+            raise HTTPException(status_code=400, detail="Invalid mode.")
+
+        set_ui_mode(body.mode)
+        url = services.start(body.mode)
+
+        return {"url": url}
+
+    @app.post("/api/open_mode")
+    def api_open_mode(body: ModeRequest):
+        if body.mode not in {"simple", "advanced", "settings"}:
+            raise HTTPException(status_code=400, detail="Invalid mode.")
+
+        if body.mode in {"simple", "advanced"}:
+            settings = load_user_settings()
+            settings["ui_mode"] = body.mode
+            settings["first_run_completed"] = True
+            save_user_settings(settings)
+
+        url = services.start(body.mode)
+
+        return {"url": url}
+
+    @app.post("/api/reset_mode")
+    def api_reset_mode():
+        reset_ui_mode()
+        return {"ok": True}
 
     return app
 
@@ -690,12 +633,19 @@ def main() -> None:
 
     parser.add_argument("--portal-port", type=int, default=8300)
     parser.add_argument("--debug", action="store_true")
+    parser.add_argument(
+        "--no-window",
+        action="store_true",
+        help="Do not open pywebview window; use browser only",
+    )
 
     args = parser.parse_args()
 
     portal_port = resolve_port(args.portal_port)
+    portal_url = f"http://127.0.0.1:{portal_port}/"
 
-    portal_app = create_portal_app()
+    services = ServiceManager(portal_url)
+    portal_app = create_portal_app(services)
 
     portal_config = uvicorn.Config(
         portal_app,
@@ -706,42 +656,47 @@ def main() -> None:
 
     portal_server = uvicorn.Server(portal_config)
 
-    portal_thread = threading.Thread(
-        target=portal_server.run,
-        daemon=True,
-    )
-
+    portal_thread = threading.Thread(target=portal_server.run, daemon=True)
     portal_thread.start()
 
     if not wait_for_port(portal_port):
         portal_server.should_exit = True
         sys.exit("Portal server did not start in time.")
 
-    portal_url = f"http://127.0.0.1:{portal_port}/"
-
     print("Opening AutoGame Localizer Launcher")
     print(f"Portal: {portal_url}")
 
-    api = LauncherApi()
-    api.portal_url = portal_url
-
-    window = webview.create_window(
-        title="AutoGame Localizer",
-        url=portal_url,
-        js_api=api,
-        width=1220,
-        height=860,
-        min_size=(1000, 700),
+    use_window = (
+        webview is not None
+        and not args.no_window
     )
 
-    api.window = window
+    if use_window:
+        window = webview.create_window(
+            title="AutoGame Localizer",
+            url=portal_url,
+            width=1220,
+            height=860,
+            min_size=(1000, 700),
+        )
 
-    webview.start(debug=args.debug)
+        webview.start(debug=args.debug)
 
-    # Window closed.
-    api.services.stop_all()
-    portal_server.should_exit = True
-    portal_thread.join(timeout=3)
+        services.stop_all()
+        portal_server.should_exit = True
+        portal_thread.join(timeout=3)
+
+    else:
+        print("pywebview window disabled or unavailable.")
+        print("Open the portal in your browser. Press Ctrl+C to stop.")
+
+        try:
+            while True:
+                time.sleep(1)
+        except KeyboardInterrupt:
+            services.stop_all()
+            portal_server.should_exit = True
+            portal_thread.join(timeout=3)
 
 
 if __name__ == "__main__":

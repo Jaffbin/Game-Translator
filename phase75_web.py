@@ -1,5 +1,4 @@
 from __future__ import annotations
-
 import shutil
 import tempfile
 import argparse
@@ -7,10 +6,11 @@ import sys
 import threading
 import traceback
 import uuid
+import mimetypes
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional
-
 import uvicorn
 from fastapi import (
     FastAPI,
@@ -20,18 +20,16 @@ from fastapi import (
     Query,
     UploadFile,
 )
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse
-from pydantic import BaseModel
-
+from pydantic import BaseModel, Field, validator
 from agl import operations
 from agl.models import EntryStatus
 from agl.project import ProjectStore
 
-
 # ----------------------------------------------------------------------
 # Background task manager
 # ----------------------------------------------------------------------
-
 class TaskManager:
     def __init__(self):
         self.tasks: Dict[str, Dict[str, Any]] = {}
@@ -50,9 +48,7 @@ class TaskManager:
                 "Another task is already running. "
                 "Please wait for it to finish."
             )
-
         task_id = uuid.uuid4().hex[:8]
-
         task = {
             "id": task_id,
             "name": name,
@@ -62,7 +58,6 @@ class TaskManager:
             "result": None,
             "logs": [],
         }
-
         with self.lock:
             self.tasks[task_id] = task
 
@@ -85,7 +80,6 @@ class TaskManager:
 
         thread = threading.Thread(target=worker, daemon=True)
         thread.start()
-
         return task_id
 
     def get(self, task_id: str) -> Optional[Dict[str, Any]]:
@@ -93,7 +87,6 @@ class TaskManager:
 
     def list(self) -> list[Dict[str, Any]]:
         items = []
-
         for task in sorted(
             self.tasks.values(),
             key=lambda x: x["created_at"],
@@ -108,14 +101,11 @@ class TaskManager:
                     "message": task["message"],
                 }
             )
-
         return items
-
 
 # ----------------------------------------------------------------------
 # Request models
 # ----------------------------------------------------------------------
-
 class EntryUpdate(BaseModel):
     entry_id: str
     target_text: Optional[str] = None
@@ -123,38 +113,49 @@ class EntryUpdate(BaseModel):
     locked: Optional[bool] = None
     ignored: Optional[bool] = None
 
-
 class TranslateRequest(BaseModel):
     provider: Optional[str] = None
     model: Optional[str] = None
     retranslate: bool = False
     no_cache: bool = False
 
-
 class QARequest(BaseModel):
     apply: bool = False
     apply_warnings: bool = False
 
-
 class PatchRequest(BaseModel):
     patch_name: Optional[str] = None
 
-
 class InstallRequest(BaseModel):
-    patch_path: str
+    patch_path: str = Field(..., min_length=1, max_length=500)
     force: bool = False
     backup: bool = True
 
+    @validator('patch_path')
+    def validate_patch_path(cls, v):
+        # Prevent path traversal attacks
+        if '..' in v or v.startswith('/') or v.startswith('\\'):
+            raise ValueError('Invalid patch path: path traversal not allowed')
+        # Only allow alphanumeric, underscore, hyphen, dot, and forward slash
+        if not re.match(r'^[a-zA-Z0-9_\-./]+$', v):
+            raise ValueError('Invalid patch path: contains invalid characters')
+        return v
 
 class RollbackRequest(BaseModel):
     backup_id: Optional[str] = None
     force: bool = False
 
+    @validator('backup_id')
+    def validate_backup_id(cls, v):
+        if v is not None:
+            # Backup ID should be a timestamp format like YYYYMMDD_HHMMSS_ffffff
+            if not re.match(r'^\d{8}_\d{6}_\d+$', v):
+                raise ValueError('Invalid backup ID format')
+        return v
 
 # ----------------------------------------------------------------------
 # HTML page
 # ----------------------------------------------------------------------
-
 PAGE = """<!doctype html>
 <html>
 <head>
@@ -166,24 +167,20 @@ PAGE = """<!doctype html>
       margin: 16px;
       background: #f7f7f7;
     }
-
     h1 {
       margin: 0 0 12px 0;
       font-size: 22px;
     }
-
     h2 {
       font-size: 16px;
       margin: 18px 0 8px 0;
     }
-
     .panel {
       background: #fff;
       border: 1px solid #ddd;
       padding: 10px;
       margin-bottom: 12px;
     }
-
     .toolbar {
       display: flex;
       gap: 8px;
@@ -191,28 +188,23 @@ PAGE = """<!doctype html>
       margin-bottom: 12px;
       align-items: center;
     }
-
     input[type=text], select {
       padding: 6px;
     }
-
     button {
       padding: 6px 10px;
       cursor: pointer;
     }
-
     #meta {
       white-space: pre-wrap;
       font-size: 13px;
     }
-
     table {
       width: 100%;
       border-collapse: collapse;
       background: #fff;
       table-layout: fixed;
     }
-
     th, td {
       border: 1px solid #ddd;
       padding: 6px;
@@ -220,75 +212,61 @@ PAGE = """<!doctype html>
       font-size: 13px;
       overflow-wrap: break-word;
     }
-
     th {
       background: #efefef;
       text-align: left;
     }
-
     td.source {
       width: 28%;
       white-space: pre-wrap;
     }
-
     td.target {
       width: 34%;
     }
-
     td.file {
       width: 16%;
       color: #555;
       font-size: 12px;
     }
-
     textarea.target {
       width: 100%;
       min-height: 58px;
       resize: vertical;
       box-sizing: border-box;
     }
-
     .status-cell {
       width: 120px;
     }
-
     .lock-cell {
       width: 50px;
       text-align: center;
     }
-
     .save-cell {
       width: 70px;
       text-align: center;
     }
-
     .pager {
       margin-top: 12px;
       display: flex;
       gap: 8px;
       align-items: center;
     }
-
     .ok {
       color: green;
       font-weight: bold;
     }
-
     .error {
       color: red;
       font-weight: bold;
     }
-
     fieldset {
       border: 1px solid #ccc;
       margin-bottom: 10px;
     }
-
     legend {
       font-weight: bold;
       padding: 0 6px;
     }
-
     .actions-row {
       display: flex;
       flex-wrap: wrap;
@@ -296,7 +274,6 @@ PAGE = """<!doctype html>
       align-items: center;
       margin-bottom: 6px;
     }
-
     #tasklog {
       height: 220px;
       overflow: auto;
@@ -307,7 +284,6 @@ PAGE = """<!doctype html>
       padding: 8px;
       white-space: pre-wrap;
     }
-
     #tasksTable td {
       cursor: pointer;
     }
@@ -315,9 +291,7 @@ PAGE = """<!doctype html>
 </head>
 <body>
   <h1>AutoGame Localizer Console</h1>
-
   <div id="meta" class="panel">Loading project...</div>
-
   <div class="panel">
     <fieldset>
       <legend>Project Actions</legend>
@@ -332,7 +306,6 @@ PAGE = """<!doctype html>
         <span id="message"></span>
       </div>
     </fieldset>
-
     <fieldset>
       <legend>Translate</legend>
       <div class="actions-row">
@@ -345,7 +318,6 @@ PAGE = """<!doctype html>
         <button onclick="startTranslate()">Translate</button>
       </div>
     </fieldset>
-
     <fieldset>
       <legend>Patch</legend>
       <div class="actions-row">
@@ -353,7 +325,6 @@ PAGE = """<!doctype html>
         <button onclick="startPatch()">Generate Patch</button>
       </div>
     </fieldset>
-
     <fieldset>
       <legend>Install / Rollback</legend>
       <div class="actions-row">
@@ -367,12 +338,10 @@ PAGE = """<!doctype html>
       </div>
     </fieldset>
   </div>
-
   <div class="panel">
     <h2>Patch Preview</h2>
     <pre id="patchpreview" style="height:180px;overflow:auto;background:#fff;border:1px solid #ddd;padding:8px;font-size:12px;"></pre>
   </div>
-
   <div class="panel">
     <h2>Tasks</h2>
     <table id="tasksTable">
@@ -389,10 +358,8 @@ PAGE = """<!doctype html>
     </table>
     <div id="tasklog"></div>
   </div>
-
   <div class="panel">
     <h2>Entries</h2>
-
     <div class="toolbar">
       <input id="q" type="text" placeholder="Search source / target / file / context" style="min-width:280px;">
       <select id="status">
@@ -407,7 +374,6 @@ PAGE = """<!doctype html>
       </select>
       <button onclick="loadEntries()">Load</button>
     </div>
-
     <table>
       <thead>
         <tr>
@@ -421,14 +387,12 @@ PAGE = """<!doctype html>
       </thead>
       <tbody id="rows"></tbody>
     </table>
-
     <div class="pager">
       <button onclick="prevPage()">Prev</button>
       <span id="pageinfo"></span>
       <button onclick="nextPage()">Next</button>
     </div>
   </div>
-
   <script>
     let offset = 0;
     const limit = 100;
@@ -445,19 +409,15 @@ PAGE = """<!doctype html>
         method: method,
         headers: {}
       };
-
       if (body !== null) {
         options.headers["Content-Type"] = "application/json";
         options.body = JSON.stringify(body);
       }
-
       const response = await fetch(url, options);
       const data = await response.json().catch(() => ({}));
-
       if (!response.ok) {
         throw new Error(data.detail || response.statusText);
       }
-
       return data;
     }
 
@@ -470,10 +430,8 @@ PAGE = """<!doctype html>
 
     async function loadMeta() {
       const data = await api("/api/meta");
-
       const meta = data.meta || {};
       const stats = data.stats || {};
-
       let lines = [];
       lines.push("Project: " + (meta.name || ""));
       lines.push("Engine: " + (meta.engine || ""));
@@ -481,30 +439,24 @@ PAGE = """<!doctype html>
       lines.push("Target language: " + (meta.target_language || ""));
       lines.push("");
       lines.push("Entry statuses:");
-
       for (const [key, value] of Object.entries(stats)) {
         lines.push("  " + key + ": " + value);
       }
-
       document.getElementById("meta").textContent = lines.join("\\n");
     }
 
     async function loadEntries() {
       const q = document.getElementById("q").value;
       const status = document.getElementById("status").value;
-
       const url = "/api/entries?q=" + encodeURIComponent(q) +
                   "&status=" + encodeURIComponent(status) +
                   "&limit=" + limit +
                   "&offset=" + offset;
-
       const data = await api(url);
       renderEntries(data.items || []);
-
       const total = data.total || 0;
       const start = total === 0 ? 0 : offset + 1;
       const end = Math.min(offset + limit, total);
-
       document.getElementById("pageinfo").textContent =
         "Showing " + start + "-" + end + " of " + total;
     }
@@ -512,7 +464,6 @@ PAGE = """<!doctype html>
     function renderEntries(items) {
       const tbody = document.getElementById("rows");
       tbody.innerHTML = "";
-
       const statusValues = [
         "pending",
         "machine_translated",
@@ -522,29 +473,23 @@ PAGE = """<!doctype html>
         "ignored",
         "error"
       ];
-
       items.forEach(entry => {
         const tr = document.createElement("tr");
         tr.dataset.id = entry.id;
 
         const tdStatus = document.createElement("td");
         tdStatus.className = "status-cell";
-
         const select = document.createElement("select");
         select.className = "status";
-
         statusValues.forEach(value => {
           const option = document.createElement("option");
           option.value = value;
           option.textContent = value;
-
           if (value === entry.status) {
             option.selected = true;
           }
-
           select.appendChild(option);
         });
-
         tdStatus.appendChild(select);
 
         const tdSource = document.createElement("td");
@@ -553,21 +498,17 @@ PAGE = """<!doctype html>
 
         const tdTarget = document.createElement("td");
         tdTarget.className = "target";
-
         const textarea = document.createElement("textarea");
         textarea.className = "target";
         textarea.value = entry.target_text || "";
-
         tdTarget.appendChild(textarea);
 
         const tdLocked = document.createElement("td");
         tdLocked.className = "lock-cell";
-
         const checkbox = document.createElement("input");
         checkbox.type = "checkbox";
         checkbox.className = "locked";
         checkbox.checked = entry.locked;
-
         tdLocked.appendChild(checkbox);
 
         const tdFile = document.createElement("td");
@@ -576,11 +517,9 @@ PAGE = """<!doctype html>
 
         const tdSave = document.createElement("td");
         tdSave.className = "save-cell";
-
         const button = document.createElement("button");
         button.textContent = "Save";
         button.onclick = () => saveEntry(entry.id);
-
         tdSave.appendChild(button);
 
         tr.appendChild(tdStatus);
@@ -589,33 +528,27 @@ PAGE = """<!doctype html>
         tr.appendChild(tdLocked);
         tr.appendChild(tdFile);
         tr.appendChild(tdSave);
-
         tbody.appendChild(tr);
       });
     }
 
     async function saveEntry(entryId) {
       const row = document.querySelector(`tr[data-id="${entryId}"]`);
-
       if (!row) {
         setMessage("Row not found.", "error");
         return;
       }
-
       const targetText = row.querySelector(".target").value;
       const status = row.querySelector(".status").value;
       const locked = row.querySelector(".locked").checked;
-
       const payload = {
         entry_id: entryId,
         target_text: targetText,
         status: status,
         locked: locked
       };
-
       try {
         const result = await api("/api/entries/update", "POST", payload);
-
         if (result.updated) {
           setMessage("Saved " + entryId.slice(0, 8), "ok");
         } else {
@@ -630,9 +563,7 @@ PAGE = """<!doctype html>
       try {
         setMessage("Starting...", "");
         const data = await api(url, "POST", body);
-
         currentTaskId = data.task_id;
-
         await refreshTasks();
         await pollCurrentTask();
       } catch (err) {
@@ -647,7 +578,6 @@ PAGE = """<!doctype html>
         retranslate: document.getElementById("retranslate").checked,
         no_cache: document.getElementById("no_cache").checked
       };
-
       startTask("/api/actions/translate", body);
     }
 
@@ -655,43 +585,35 @@ PAGE = """<!doctype html>
       const body = {
         patch_name: document.getElementById("patch_name").value.trim() || null
       };
-
       startTask("/api/actions/patch", body);
     }
 
     async function startInstall() {
       const patchPath = document.getElementById("patch_select").value;
-
       if (!patchPath) {
         alert("Please select a patch.");
         return;
       }
-
       if (!confirm("Install patch into game directory?")) {
         return;
       }
-
       const body = {
         patch_path: patchPath,
         force: document.getElementById("install_force").checked,
         backup: true
       };
-
       startTask("/api/actions/install", body);
     }
 
     async function startRollback() {
       const backupId = document.getElementById("backup_select").value || null;
-
       if (!confirm("Rollback game files?")) {
         return;
       }
-
       const body = {
         backup_id: backupId,
         force: false
       };
-
       startTask("/api/actions/rollback", body);
     }
 
@@ -699,32 +621,24 @@ PAGE = """<!doctype html>
       const data = await api("/api/tasks");
       const tbody = document.getElementById("tasksBody");
       tbody.innerHTML = "";
-
       (data.items || []).forEach(task => {
         const tr = document.createElement("tr");
         tr.onclick = () => viewTask(task.id);
-
         const tdId = document.createElement("td");
         tdId.textContent = task.id;
-
         const tdName = document.createElement("td");
         tdName.textContent = task.name;
-
         const tdStatus = document.createElement("td");
         tdStatus.textContent = task.status;
-
         const tdCreated = document.createElement("td");
         tdCreated.textContent = task.created_at;
-
         const tdMessage = document.createElement("td");
         tdMessage.textContent = task.message || "";
-
         tr.appendChild(tdId);
         tr.appendChild(tdName);
         tr.appendChild(tdStatus);
         tr.appendChild(tdCreated);
         tr.appendChild(tdMessage);
-
         tbody.appendChild(tr);
       });
     }
@@ -740,18 +654,14 @@ PAGE = """<!doctype html>
       if (!currentTaskId) {
         return;
       }
-
       try {
         const task = await api(`/api/tasks/${currentTaskId}`);
-
         document.getElementById("tasklog").textContent =
           (task.logs || []).join("\\n");
-
         setMessage(
           `${task.name}: ${task.status} ${task.message || ""}`,
           task.status === "failed" ? "error" : "ok"
         );
-
         if (task.status === "running") {
           setTimeout(pollCurrentTask, 1500);
         } else {
@@ -767,12 +677,10 @@ PAGE = """<!doctype html>
       const data = await api("/api/patches");
       const select = document.getElementById("patch_select");
       select.innerHTML = "";
-
       const empty = document.createElement("option");
       empty.value = "";
       empty.textContent = "-- select patch --";
       select.appendChild(empty);
-
       (data.items || []).forEach(patch => {
         const option = document.createElement("option");
         option.value = patch.path;
@@ -785,12 +693,10 @@ PAGE = """<!doctype html>
       const data = await api("/api/backups");
       const select = document.getElementById("backup_select");
       select.innerHTML = "";
-
       const empty = document.createElement("option");
       empty.value = "";
       empty.textContent = "-- latest backup --";
       select.appendChild(empty);
-
       (data.items || []).forEach(backup => {
         const option = document.createElement("option");
         option.value = backup.backup_id;
@@ -826,30 +732,22 @@ PAGE = """<!doctype html>
     async function refreshProviders() {
       try {
         const data = await api("/api/config/providers");
-
         const select = document.getElementById("provider");
-
         if (!select) {
           return;
         }
-
         select.innerHTML = "";
-
         const empty = document.createElement("option");
         empty.value = "";
         empty.textContent = "default";
         select.appendChild(empty);
-
         (data.items || []).forEach(p => {
           const option = document.createElement("option");
           option.value = p.id;
-
           let label = p.id + " | " + p.model;
-
           if (!p.has_api_key) {
             label += " | no key";
           }
-
           option.textContent = label;
           select.appendChild(option);
         });
@@ -866,30 +764,23 @@ PAGE = """<!doctype html>
 
     async function importCsv() {
       const input = document.getElementById("csv_file");
-
       if (!input.files.length) {
         alert("Please choose a CSV file first.");
         return;
       }
-
       const formData = new FormData();
       formData.append("file", input.files[0]);
       formData.append("overwrite_locked", "false");
-
       try {
         setMessage("Importing CSV...", "");
-
         const response = await fetch("/api/import/csv", {
           method: "POST",
           body: formData
         });
-
         const data = await response.json();
-
         if (!response.ok) {
           throw new Error(data.detail || "Import failed");
         }
-
         setMessage(
           "CSV imported: " +
           "updated=" + (data.updated || 0) + ", " +
@@ -898,7 +789,6 @@ PAGE = """<!doctype html>
           "locked=" + (data.locked || 0),
           "ok"
         );
-
         await refreshAll();
       } catch (err) {
         setMessage(err.message, "error");
@@ -908,29 +798,21 @@ PAGE = """<!doctype html>
     async function previewPatch() {
       try {
         setMessage("Generating patch preview...", "");
-
         const data = await api("/api/patch/preview");
-
         let lines = [];
-
         lines.push("Total entries: " + (data.total_entries || 0));
         lines.push("Patchable files: " + (data.patchable_files || 0));
         lines.push("Blocked QA error entries: " + (data.blocked_error_entries || 0));
         lines.push("");
-
         (data.files || []).forEach(f => {
           lines.push(f.file_path + "  entries=" + f.entry_count);
-
           (f.samples || []).forEach(s => {
             lines.push("    SRC: " + s.source);
             lines.push("    TGT: " + s.target);
           });
-
           lines.push("");
         });
-
         document.getElementById("patchpreview").textContent = lines.join("\\n");
-
         setMessage("Patch preview ready.", "ok");
       } catch (err) {
         setMessage(err.message, "error");
@@ -941,13 +823,22 @@ PAGE = """<!doctype html>
 </html>
 """
 
-
 # ----------------------------------------------------------------------
 # App factory
 # ----------------------------------------------------------------------
-
 def create_app(project_dir: Path) -> FastAPI:
     app = FastAPI(title="AutoGame Localizer Console")
+
+    # Add CORS middleware with restricted origins
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["http://localhost", "http://localhost:8000", "http://127.0.0.1", "http://127.0.0.1:8000"],
+        allow_credentials=False,
+        allow_methods=["GET", "POST"],
+        allow_headers=["Content-Type"],
+        max_age=600,
+    )
+
     tasks = TaskManager()
 
     def require_project() -> None:
@@ -957,6 +848,16 @@ def create_app(project_dir: Path) -> FastAPI:
                 detail=f"Project not found: {project_dir}",
             )
 
+    def sanitize_path_component(name: str) -> str:
+        """Sanitize path component to prevent path traversal."""
+        # Remove any path separators and dangerous characters
+        name = name.replace('/', '').replace('\\', '').replace('..', '')
+        # Only allow safe characters
+        name = re.sub(r'[^a-zA-Z0-9_\-\.]', '', name)
+        if not name or name in ('.', '..'):
+            raise ValueError("Invalid path component")
+        return name
+
     @app.get("/", response_class=HTMLResponse)
     def index() -> str:
         require_project()
@@ -965,7 +866,6 @@ def create_app(project_dir: Path) -> FastAPI:
     # ------------------------------------------------------------------
     # Project / entries APIs
     # ------------------------------------------------------------------
-
     @app.get("/api/meta")
     def api_meta():
         require_project()
@@ -979,7 +879,6 @@ def create_app(project_dir: Path) -> FastAPI:
         offset: int = Query(default=0, ge=0),
     ):
         require_project()
-
         with ProjectStore(project_dir) as store:
             entries = store.all_entries()
 
@@ -992,7 +891,6 @@ def create_app(project_dir: Path) -> FastAPI:
 
         if q:
             query = q.lower()
-
             entries = [
                 entry
                 for entry in entries
@@ -1004,9 +902,7 @@ def create_app(project_dir: Path) -> FastAPI:
             ]
 
         total = len(entries)
-
         items = []
-
         for entry in entries[offset:offset + limit]:
             items.append(
                 {
@@ -1030,10 +926,8 @@ def create_app(project_dir: Path) -> FastAPI:
     @app.post("/api/entries/update")
     def api_entries_update(update: EntryUpdate):
         require_project()
-
         with ProjectStore(project_dir) as store:
             entry = store.get_entry(update.entry_id)
-
             if entry is None:
                 raise HTTPException(
                     status_code=404,
@@ -1041,7 +935,6 @@ def create_app(project_dir: Path) -> FastAPI:
                 )
 
             status: Optional[EntryStatus] = None
-
             if update.status is not None:
                 try:
                     status = EntryStatus(update.status)
@@ -1053,16 +946,13 @@ def create_app(project_dir: Path) -> FastAPI:
 
             locked_update = update.locked
             ignored_update = update.ignored
-
             if status == EntryStatus.LOCKED and locked_update is None:
                 locked_update = True
-
             if status == EntryStatus.IGNORED and ignored_update is None:
                 ignored_update = True
 
             human_reviewed: Optional[bool] = None
             machine_translated: Optional[bool] = None
-
             if status == EntryStatus.REVIEWED:
                 human_reviewed = True
                 machine_translated = False
@@ -1076,7 +966,6 @@ def create_app(project_dir: Path) -> FastAPI:
                 human_reviewed=human_reviewed,
                 machine_translated=machine_translated,
             )
-
             store.save_meta()
 
             return {
@@ -1086,7 +975,6 @@ def create_app(project_dir: Path) -> FastAPI:
     # ------------------------------------------------------------------
     # Lists
     # ------------------------------------------------------------------
-
     @app.get("/api/patches")
     def api_patches():
         require_project()
@@ -1110,23 +998,19 @@ def create_app(project_dir: Path) -> FastAPI:
     @app.get("/api/tasks/{task_id}")
     def api_task_detail(task_id: str):
         task = tasks.get(task_id)
-
         if task is None:
             raise HTTPException(
                 status_code=404,
                 detail=f"Task not found: {task_id}",
             )
-
         return task
 
     # ------------------------------------------------------------------
     # Actions
     # ------------------------------------------------------------------
-
     @app.post("/api/actions/scan")
     def action_scan():
         require_project()
-
         try:
             task_id = tasks.start(
                 "scan",
@@ -1137,13 +1021,11 @@ def create_app(project_dir: Path) -> FastAPI:
             )
         except RuntimeError as exc:
             raise HTTPException(status_code=409, detail=str(exc))
-
         return {"task_id": task_id}
 
     @app.post("/api/actions/translate")
     def action_translate(body: TranslateRequest):
         require_project()
-
         try:
             task_id = tasks.start(
                 "translate",
@@ -1158,13 +1040,11 @@ def create_app(project_dir: Path) -> FastAPI:
             )
         except RuntimeError as exc:
             raise HTTPException(status_code=409, detail=str(exc))
-
         return {"task_id": task_id}
 
     @app.post("/api/actions/qa")
     def action_qa(body: QARequest):
         require_project()
-
         try:
             task_id = tasks.start(
                 "qa",
@@ -1177,13 +1057,11 @@ def create_app(project_dir: Path) -> FastAPI:
             )
         except RuntimeError as exc:
             raise HTTPException(status_code=409, detail=str(exc))
-
         return {"task_id": task_id}
 
     @app.post("/api/actions/patch")
     def action_patch(body: PatchRequest):
         require_project()
-
         try:
             task_id = tasks.start(
                 "patch",
@@ -1195,19 +1073,43 @@ def create_app(project_dir: Path) -> FastAPI:
             )
         except RuntimeError as exc:
             raise HTTPException(status_code=409, detail=str(exc))
-
         return {"task_id": task_id}
 
     @app.post("/api/actions/install")
     def action_install(body: InstallRequest):
         require_project()
+        # Additional path validation at the API level
+        # Resolve patch path relative to project's patches directory
+        patches_dir = project_dir / "patches"
+        # Sanitize the patch_path to prevent traversal
+        try:
+            safe_patch_name = sanitize_path_component(body.patch_path)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        # Construct the full path and ensure it stays within patches directory
+        full_patch_path = (patches_dir / safe_patch_name).resolve()
+
+        # Verify the resolved path is within the patches directory
+        try:
+            full_patch_path.relative_to(patches_dir.resolve())
+        except ValueError:
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid patch path: must be within project patches directory"
+            )
+
+        if not full_patch_path.exists():
+            raise HTTPException(
+                status_code=404,
+                detail=f"Patch not found: {safe_patch_name}"
+            )
 
         try:
             task_id = tasks.start(
                 "install",
                 lambda log: operations.install_project(
                     project_dir=project_dir,
-                    patch_path=body.patch_path,
+                    patch_path=full_patch_path,
                     force=body.force,
                     backup=body.backup,
                     log=log,
@@ -1215,39 +1117,66 @@ def create_app(project_dir: Path) -> FastAPI:
             )
         except RuntimeError as exc:
             raise HTTPException(status_code=409, detail=str(exc))
-
         return {"task_id": task_id}
 
     @app.post("/api/actions/rollback")
     def action_rollback(body: RollbackRequest):
         require_project()
+        # Validate backup_id if provided
+        if body.backup_id is not None:
+            try:
+                safe_backup_id = sanitize_path_component(body.backup_id)
+                # Additional format validation for backup ID (timestamp format)
+                if not re.match(r'^\d{8}_\d{6}_\d+$', safe_backup_id):
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Invalid backup ID format"
+                    )
+            except ValueError as e:
+                raise HTTPException(status_code=400, detail=str(e))
+
+            # Verify backup exists and is within backups directory
+            backups_dir = project_dir / "backups"
+            backup_path = (backups_dir / safe_backup_id).resolve()
+
+            try:
+                backup_path.relative_to(backups_dir.resolve())
+            except ValueError:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Invalid backup ID: must be within project backups directory"
+                )
+
+            if not backup_path.exists():
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Backup not found: {safe_backup_id}"
+                )
+        else:
+            safe_backup_id = None
 
         try:
             task_id = tasks.start(
                 "rollback",
                 lambda log: operations.rollback_project(
                     project_dir=project_dir,
-                    backup_id=body.backup_id,
+                    backup_id=safe_backup_id,
                     force=body.force,
                     log=log,
                 ),
             )
         except RuntimeError as exc:
             raise HTTPException(status_code=409, detail=str(exc))
-
         return {"task_id": task_id}
-
 
     # ------------------------------------------------------------------
     # Phase 10: CSV export / import / provider config / patch preview
     # ------------------------------------------------------------------
-
     @app.get("/api/export/csv")
     def api_export_csv(
         status: Optional[str] = Query(default=None),
     ):
         require_project()
-
         try:
             result = operations.export_project_csv(
                 project_dir=project_dir,
@@ -1258,7 +1187,6 @@ def create_app(project_dir: Path) -> FastAPI:
                 status_code=400,
                 detail=str(exc),
             )
-
         return FileResponse(
             path=result["path"],
             media_type="text/csv",
@@ -1271,15 +1199,32 @@ def create_app(project_dir: Path) -> FastAPI:
         overwrite_locked: bool = Form(False),
     ):
         require_project()
+        # Validate file type - only allow CSV
+        if file.filename is None:
+            raise HTTPException(status_code=400, detail="No filename provided")
+
+        # Check file extension
+        if not file.filename.lower().endswith('.csv'):
+            raise HTTPException(status_code=400, detail="Only CSV files are allowed")
+
+        # Validate MIME type
+        allowed_mime_types = ['text/csv', 'application/vnd.ms-excel']
+        if file.content_type and file.content_type not in allowed_mime_types:
+            raise HTTPException(status_code=400, detail="Invalid file type. Only CSV files are allowed")
+
+        # Limit file size (10MB max)
+        MAX_FILE_SIZE = 10 * 1024 * 1024
+        content = await file.read()
+        if len(content) > MAX_FILE_SIZE:
+            raise HTTPException(status_code=400, detail="File too large. Maximum size is 10MB")
 
         tmp_path: Optional[Path] = None
-
         try:
             with tempfile.NamedTemporaryFile(
                 delete=False,
                 suffix=".csv",
             ) as tmp:
-                shutil.copyfileobj(file.file, tmp)
+                tmp.write(content)
                 tmp_path = Path(tmp.name)
 
             stats = operations.import_project_csv(
@@ -1287,15 +1232,12 @@ def create_app(project_dir: Path) -> FastAPI:
                 csv_path=tmp_path,
                 overwrite_locked=overwrite_locked,
             )
-
             return stats
-
         except Exception as exc:
             raise HTTPException(
                 status_code=400,
                 detail=str(exc),
             )
-
         finally:
             if tmp_path is not None and tmp_path.exists():
                 tmp_path.unlink()
@@ -1303,7 +1245,6 @@ def create_app(project_dir: Path) -> FastAPI:
     @app.get("/api/config/providers")
     def api_config_providers():
         require_project()
-
         return {
             "items": operations.get_provider_configs(),
         }
@@ -1311,59 +1252,71 @@ def create_app(project_dir: Path) -> FastAPI:
     @app.get("/api/patch/preview")
     def api_patch_preview():
         require_project()
-
         return operations.preview_patch_project(
             project_dir=project_dir,
         )
-    
-    return app
 
+    return app
 
 # ----------------------------------------------------------------------
 # CLI entry
 # ----------------------------------------------------------------------
-
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Phase 7.5: local web console"
     )
-
     parser.add_argument(
         "project_dir",
         help="Path to translation project, e.g. projects/MyGame_zh",
     )
-
     parser.add_argument(
         "--host",
         default="127.0.0.1",
+        help="Host to bind the server to (default: 127.0.0.1). Use 0.0.0.0 to expose to all interfaces (not recommended for security)",
     )
-
     parser.add_argument(
         "--port",
         type=int,
         default=8000,
     )
-
+    parser.add_argument(
+        "--allow-remote",
+        action="store_true",
+        help="Allow remote connections by binding to 0.0.0.0. WARNING: This exposes the server to all network interfaces and is not recommended without additional security measures.",
+    )
     args = parser.parse_args()
 
     project_dir = Path(args.project_dir)
-
     if not (project_dir / "project.json").exists():
         sys.exit(
             f"Project file not found: {project_dir / 'project.json'}"
         )
 
-    app = create_app(project_dir)
+    # Security warning for remote access
+    host = args.host
+    if args.allow_remote:
+        host = "0.0.0.0"
+        print("=" * 60)
+        print("WARNING: Server will be accessible from all network interfaces!")
+        print("This is a LOCAL development tool and should NOT be exposed")
+        print("to untrusted networks without proper authentication.")
+        print("Consider using a reverse proxy with authentication.")
+        print("=" * 60)
 
+    app = create_app(project_dir)
     print(f"Opening web console for project: {project_dir}")
-    print(f"Visit: http://{args.host}:{args.port}")
+    print(f"Visit: http://{host}:{args.port}")
+
+    if host == "127.0.0.1":
+        print("Server is only accessible from localhost (secure).")
+    else:
+        print(f"WARNING: Server is accessible from all interfaces at {host}")
 
     uvicorn.run(
         app,
-        host=args.host,
+        host=host,
         port=args.port,
     )
-
 
 if __name__ == "__main__":
     main()
