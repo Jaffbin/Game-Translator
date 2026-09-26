@@ -65,11 +65,27 @@ def wait_for_port(port: int, timeout_seconds: float = 10.0) -> bool:
 
 class ConsoleManager:
     """
-    Manages one Phase 7.5 console per project.
+    Manages one Phase 7/7.5 console per project.
     """
 
     def __init__(self):
         self.consoles: Dict[str, Dict[str, Any]] = {}
+
+    def _get_console_app(self, project_dir: Path):
+        """动态导入 Console 应用，兼容 phase75_web 或 phase7_web"""
+        try:
+            from phase75_web import create_app as create_console_app
+            return create_console_app(project_dir)
+        except ImportError:
+            pass
+            
+        try:
+            from phase7_web import create_app as create_console_app
+            return create_console_app(project_dir)
+        except ImportError:
+            raise RuntimeError(
+                "找不到项目控制台模块。请确保项目中存在 phase75_web.py 或 phase7_web.py。"
+            )
 
     def start(self, project_name: str, project_dir: Path | str) -> int:
         project_dir = Path(project_dir).resolve()
@@ -88,9 +104,11 @@ class ConsoleManager:
             ):
                 return existing["port"]
 
-        port = find_free_port()
+        # 动态获取 app
+        app = self._get_console_app(project_dir)
 
-        app = create_console_app(project_dir)
+        # 找一个空闲端口 (确保你文件顶部有 find_free_port 函数)
+        port = find_free_port(8400) 
 
         config = uvicorn.Config(
             app,
@@ -124,43 +142,32 @@ class ConsoleManager:
 
     def list(self) -> list[Dict[str, Any]]:
         items = []
-
         for project_name, info in self.consoles.items():
             server = info.get("server")
             thread = info.get("thread")
-
             running = (
                 server is not None
                 and thread is not None
                 and thread.is_alive()
                 and not getattr(server, "should_exit", False)
             )
-
-            items.append(
-                {
-                    "project": project_name,
-                    "port": info.get("port"),
-                    "running": running,
-                }
-            )
-
+            items.append({
+                "project": project_name,
+                "port": info.get("port"),
+                "running": running,
+            })
         return items
 
     def stop_all(self) -> None:
         for info in self.consoles.values():
             server = info.get("server")
-
             if server is not None:
                 server.should_exit = True
-
         for info in self.consoles.values():
             thread = info.get("thread")
-
             if thread is not None:
                 thread.join(timeout=2)
-
         self.consoles.clear()
-
 
 # ----------------------------------------------------------------------
 # Request models
@@ -226,10 +233,11 @@ tr:hover td { background: #f8fafc; }
 <body>
   <div class="sidebar">
     <div class="logo">⌘ Developer Workspace</div>
-    <a href="#" class="active">◫ 项目</a>
-    <a href="__PORTAL_URL__">▤ Project Console</a>
-    <a href="__PORTAL_URL__">⚙ Settings</a>
-    <a href="__PORTAL_URL__" class="home">← 返回首页</a>
+    <a href="#" class="active">◫ Projects</a>
+    <a href="__PORTAL_URL__" class="home">← HomePage</a>
+    <div style="margin-top:24px; padding:12px; background:#1e293b; border-radius:8px; font-size:12px; color:#94a3b8; line-height:1.5;">
+      💡 <b>提示</b>:<br>Project Console 是针对具体项目的。请在右侧项目表格中点击 <b style="color:#fff;">Open Console</b> 进入审校工作台。
+    </div>
   </div>
 
   <div class="main">
