@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+import subprocess
+import sys
 import argparse
 import datetime
 import threading
@@ -59,6 +61,30 @@ class SimpleTaskState:
             "patch": self.patch,
         }
 
+def select_folder_native() -> str:
+    """Open a native folder picker via PowerShell (Windows, thread-safe)."""
+    if not sys.platform.startswith("win"):
+        return ""
+
+    script = (
+        "Add-Type -AssemblyName System.Windows.Forms; "
+        "$d = New-Object System.Windows.Forms.FolderBrowserDialog; "
+        "$d.ShowNewFolderButton = $false; "
+        "$d.Description = 'Select game folder'; "
+        "if ($d.ShowDialog() -eq 'OK') { $d.SelectedPath } else { '' }"
+    )
+
+    try:
+        result = subprocess.run(
+            ["powershell", "-STA", "-NoProfile", "-Command", script],
+            capture_output=True,
+            text=True,
+            timeout=180,
+        )
+        return (result.stdout or "").strip()
+    except Exception as exc:
+        print(f"Folder dialog error: {exc}")
+        return ""
 
 TASK = SimpleTaskState()
 
@@ -386,7 +412,11 @@ PAGE = """<!doctype html>
 <body>
   <div class="topbar">
     <h2>▶ 普通玩家模式</h2>
-    <a href="__PORTAL_URL__" class="back-btn">← 返回首页</a>
+    <div style="display:flex; gap:12px; align-items:center;">
+      <button class="btn-primary" style="padding:8px 16px; font-size:13px;" onclick="chooseFolder()">选择游戏文件夹</button>
+      <span id="folder_status" class="hint" style="margin:0;"></span>
+      <a href="__PORTAL_URL__" class="back-btn">← 返回首页</a>
+    </div>
   </div>
 
   <div class="container">
@@ -457,6 +487,20 @@ PAGE = """<!doctype html>
         if (i < n) el.classList.add('done');
         if (i === n) el.classList.add('active');
       }
+    }
+
+    async function chooseFolder() {
+    const statusEl = document.getElementById('folder_status');
+    try {
+        statusEl.textContent = '正在打开文件夹选择窗口...';
+        const res = await fetch('/api/select_folder', { method: 'POST' });
+        const data = await res.json();
+        if (!data.path) { statusEl.textContent = '未选择文件夹。'; return; }
+        document.getElementById('game_path').value = data.path;
+        statusEl.textContent = '已选择：' + data.path;
+    } catch (err) {
+        statusEl.textContent = '选择失败：' + err;
+    }
     }
 
     async function api(url, method, body) {
@@ -547,6 +591,16 @@ def create_simple_app() -> FastAPI:
     def index() -> str:
         portal_url = os.environ.get("AGL_PORTAL_URL", "http://127.0.0.1:8300/")
         return PAGE.replace("__PORTAL_URL__", portal_url)
+
+    @app.post("/api/select_folder")
+    def api_select_folder():
+        return {"path": select_folder_native()}
+
+    from fastapi.responses import RedirectResponse
+
+    @app.get("/desktop")
+    def desktop_redirect():
+        return RedirectResponse(url="/")
 
     @app.get("/api/state")
     def api_state():

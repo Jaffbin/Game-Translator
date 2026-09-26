@@ -3,18 +3,15 @@ from __future__ import annotations
 import argparse
 import os
 import socket
-import subprocess
 import sys
 import threading
 import time
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Tuple
 
 import uvicorn
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
-from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.responses import Response as StarletteResponse
 
 from agl.user_settings import (
     load_user_settings,
@@ -22,13 +19,11 @@ from agl.user_settings import (
     save_user_settings,
     set_ui_mode,
 )
-from phase_ui1_simple import create_simple_app
 
 try:
     import webview
 except ImportError:
     webview = None
-
 
 # ----------------------------------------------------------------------
 # Network helpers
@@ -39,17 +34,14 @@ def is_port_open(port: int) -> bool:
         s.settimeout(0.2)
         return s.connect_ex(("127.0.0.1", port)) == 0
 
-
 def find_free_port(start_port: int, max_attempts: int = 200) -> int:
     for port in range(start_port, start_port + max_attempts):
         if not is_port_open(port):
             return port
     raise RuntimeError(f"No free port found between {start_port} and {start_port + max_attempts - 1}")
 
-
 def resolve_port(preferred_port: int) -> int:
     return preferred_port if not is_port_open(preferred_port) else find_free_port(preferred_port + 1)
-
 
 def wait_for_port(port: int, timeout_seconds: float = 15.0) -> bool:
     start = time.time()
@@ -59,41 +51,16 @@ def wait_for_port(port: int, timeout_seconds: float = 15.0) -> bool:
         time.sleep(0.15)
     return False
 
-
 # ----------------------------------------------------------------------
-# Native folder dialog (PowerShell, thread-safe)
-# ----------------------------------------------------------------------
-
-def select_folder_native() -> str:
-    if not sys.platform.startswith("win"):
-        return ""
-
-    script = (
-        "Add-Type -AssemblyName System.Windows.Forms; "
-        "$d = New-Object System.Windows.Forms.FolderBrowserDialog; "
-        "$d.ShowNewFolderButton = $false; "
-        "$d.Description = 'Select game folder'; "
-        "if ($d.ShowDialog() -eq 'OK') { $d.SelectedPath } else { '' }"
-    )
-
-    try:
-        result = subprocess.run(
-            ["powershell", "-STA", "-NoProfile", "-Command", script],
-            capture_output=True,
-            text=True,
-            timeout=180,
-        )
-        return (result.stdout or "").strip()
-    except Exception as exc:
-        print(f"Folder dialog error: {exc}")
-        return ""
-
-
-# ----------------------------------------------------------------------
-# Shared design system CSS
+# Portal Page (HTML + CSS + JS)
 # ----------------------------------------------------------------------
 
-SHARED_CSS = """
+PORTAL_PAGE = """<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>AutoGame Localizer</title>
+<style>
 :root {
   --bg: #f8fafc; --surface: #ffffff; --primary: #2563eb; --primary-hover: #1d4ed8;
   --text-main: #0f172a; --text-muted: #64748b; --border: #e2e8f0;
@@ -101,8 +68,7 @@ SHARED_CSS = """
   --radius: 12px; --shadow: 0 4px 6px -1px rgb(0 0 0 / 0.05), 0 2px 4px -2px rgb(0 0 0 / 0.05);
 }
 * { box-sizing: border-box; }
-body { font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Microsoft YaHei", sans-serif; background: var(--bg); color: var(--text-main); margin: 0; }
-.center-body { display: flex; align-items: center; justify-content: center; min-height: 100vh; }
+body { font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Microsoft YaHei", sans-serif; background: var(--bg); color: var(--text-main); margin: 0; display: flex; align-items: center; justify-content: center; min-height: 100vh; }
 .container { width: 860px; max-width: 92vw; }
 h1 { font-size: 32px; margin: 0 0 8px 0; letter-spacing: -0.5px; }
 .sub { color: var(--text-muted); margin: 0 0 32px 0; font-size: 16px; }
@@ -128,19 +94,11 @@ button.primary:hover { background: var(--primary-hover); }
 .muted { font-size: 13px; color: var(--text-muted); }
 .hidden { display: none; }
 #warning { color: #991b1b; background: #fef2f2; border: 1px solid #fecaca; border-radius: 8px; padding: 10px 14px; margin-bottom: 18px; font-size: 14px; }
-"""
-
-
-PORTAL_PAGE = """<!doctype html>
-<html lang="zh-CN">
-<head>
-<meta charset="utf-8">
-<title>AutoGame Localizer</title>
-<style>__CSS__</style>
+</style>
 </head>
-<body class="center-body">
+<body>
   <div class="container">
-    <h1>AutoGame Localizer <span class="badge">DESKTOP WEB · PYWEBVIEW</span></h1>
+    <h1>AutoGame Localizer <span class="badge">DESKTOP WEB</span></h1>
     <p class="sub">让游戏本地化，变得简单。</p>
 
     <div id="warning" class="hidden"></div>
@@ -150,7 +108,7 @@ PORTAL_PAGE = """<!doctype html>
       <div class="cards">
         <div class="card" onclick="chooseMode('simple')">
           <h3>▶ 普通玩家模式 <span class="badge green">推荐</span></h3>
-          <p>隐藏技术细节，只保留"选择 → 翻译 → 应用"这条清晰路径。</p>
+          <p>隐藏技术细节，只保留“选择 → 翻译 → 应用”这条清晰路径。</p>
           <ul><li>✓ 选择游戏文件夹</li><li>✓ 查看翻译进度与日志</li><li>✓ 应用或恢复原始文件</li></ul>
         </div>
         <div class="card" onclick="chooseMode('advanced')">
@@ -233,104 +191,17 @@ window.addEventListener("load", init);
 </script>
 </body>
 </html>
-""".replace("__CSS__", SHARED_CSS)
-
-
-SIMPLE_DESKTOP_PAGE = """<!doctype html>
-<html lang="zh-CN">
-<head>
-<meta charset="utf-8">
-<title>普通玩家模式</title>
-<style>
-:root {
-  --bg: #f8fafc; --surface: #ffffff; --primary: #2563eb;
-  --text-main: #0f172a; --text-muted: #64748b; --border: #e2e8f0;
-}
-html, body { margin: 0; height: 100%; font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Microsoft YaHei", sans-serif; background: var(--bg); color: var(--text-main); }
-.topbar { height: 56px; background: var(--surface); border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 12px; padding: 0 20px; }
-.topbar .title { font-weight: 700; font-size: 16px; }
-.topbar button { padding: 8px 16px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface); font-size: 13px; cursor: pointer; }
-.topbar button.primary { background: var(--primary); color: #fff; border-color: var(--primary); }
-.topbar a { margin-left: auto; color: var(--text-muted); font-size: 13px; text-decoration: none; }
-.topbar a:hover { color: var(--primary); }
-#status { font-size: 13px; color: var(--text-muted); max-width: 420px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-iframe { width: 100%; height: calc(100% - 56px); border: 0; display: block; }
-</style>
-</head>
-<body>
-  <div class="topbar">
-    <span class="title">▶ 普通玩家模式</span>
-    <button class="primary" onclick="chooseFolder()">选择游戏文件夹</button>
-    <span id="status">简单模式</span>
-    <a href="__PORTAL_URL__">← 返回首页</a>
-  </div>
-  <iframe id="frame" src="/"></iframe>
-<script>
-function setStatus(m) { document.getElementById("status").textContent = m; }
-async function chooseFolder() {
-  try {
-    setStatus("正在打开文件夹选择窗口...");
-    const res = await fetch("/api/select_folder", { method: "POST" });
-    const data = await res.json();
-    if (!data.path) { setStatus("未选择文件夹。"); return; }
-    const doc = document.getElementById("frame").contentDocument;
-    const input = doc && doc.getElementById("game_path");
-    if (!input) { setStatus("找不到路径输入框。"); return; }
-    input.value = data.path;
-    setStatus("已选择：" + data.path);
-  } catch (err) { setStatus("选择文件夹失败：" + err); }
-}
-</script>
-</body>
-</html>
 """
-
-
-# ----------------------------------------------------------------------
-# Home button injection for advanced / settings pages
-# ----------------------------------------------------------------------
-
-HOME_BUTTON_HTML = """
-<div style="position:fixed;top:10px;right:14px;z-index:99999;">
-  <a href="__PORTAL_URL__"
-     style="display:inline-block;padding:8px 14px;background:#475569;color:#fff;border-radius:8px;text-decoration:none;font-size:13px;box-shadow:0 2px 8px rgba(0,0,0,0.25);">
-    ← 返回首页
-  </a>
-</div>
-"""
-
-
-class HomeButtonMiddleware(BaseHTTPMiddleware):
-    def __init__(self, app, portal_url: str):
-        super().__init__(app)
-        self.portal_url = portal_url
-
-    async def dispatch(self, request, call_next):
-        response = await call_next(request)
-        if "text/html" not in response.headers.get("content-type", ""):
-            return response
-
-        body = b"".join([chunk async for chunk in response.body_iterator])
-        try:
-            text = body.decode("utf-8")
-        except UnicodeDecodeError:
-            return StarletteResponse(content=body, status_code=response.status_code, media_type=response.media_type)
-
-        button = HOME_BUTTON_HTML.replace("__PORTAL_URL__", self.portal_url)
-        if "</body>" in text:
-            text = text.replace("</body>", button + "</body>", 1)
-        else:
-            text += button
-
-        return StarletteResponse(content=text, status_code=response.status_code, media_type="text/html; charset=utf-8")
-
 
 # ----------------------------------------------------------------------
 # Service manager
 # ----------------------------------------------------------------------
 
-MODE_DEFAULT_PORTS = {"simple": 8310, "advanced": 8320, "settings": 8330}
-
+MODE_DEFAULT_PORTS = {
+    "simple": 8310,
+    "advanced": 8320,
+    "settings": 8330,
+}
 
 class ServiceManager:
     def __init__(self, portal_url: str):
@@ -338,41 +209,26 @@ class ServiceManager:
         self.services: Dict[str, Dict[str, Any]] = {}
 
     def _create_app(self, mode: str) -> Tuple[FastAPI, str]:
+        # 传递 Portal URL 给子应用，以便它们能生成“返回首页”的链接
         os.environ["AGL_PORTAL_URL"] = self.portal_url
 
         if mode == "simple":
-            app = create_simple_app()
-            portal_url = self.portal_url
-
-            @app.get("/desktop", response_class=HTMLResponse)
-            def simple_desktop_page() -> str:
-                return SIMPLE_DESKTOP_PAGE.replace("__PORTAL_URL__", portal_url)
-
-            @app.post("/api/select_folder")
-            def api_select_folder():
-                return {"path": select_folder_native()}
-
-            return app, "/desktop"
+            from phase_ui1_simple import create_simple_app
+            return create_simple_app(), "/"
 
         if mode == "advanced":
             try:
                 from phase11_workspace import create_workspace_app
             except ImportError as exc:
                 raise RuntimeError("开发者模式需要 phase11_workspace.py。") from exc
-
-            app = create_workspace_app()
-            app.add_middleware(HomeButtonMiddleware, portal_url=self.portal_url)
-            return app, "/"
+            return create_workspace_app(), "/"
 
         if mode == "settings":
             try:
                 from phase12_settings import create_settings_app
             except ImportError as exc:
                 raise RuntimeError("设置页面需要 phase12_settings.py。") from exc
-
-            app = create_settings_app()
-            app.add_middleware(HomeButtonMiddleware, portal_url=self.portal_url)
-            return app, "/"
+            return create_settings_app(), "/"
 
         raise ValueError(f"Unknown mode: {mode}")
 
@@ -408,14 +264,12 @@ class ServiceManager:
                 info["thread"].join(timeout=2)
         self.services.clear()
 
-
 # ----------------------------------------------------------------------
 # Portal app
 # ----------------------------------------------------------------------
 
 class ModeRequest(BaseModel):
     mode: str
-
 
 def create_portal_app(services: ServiceManager) -> FastAPI:
     app = FastAPI(title="AutoGame Localizer Launcher")
@@ -452,7 +306,6 @@ def create_portal_app(services: ServiceManager) -> FastAPI:
         return {"ok": True}
 
     return app
-
 
 # ----------------------------------------------------------------------
 # Main
@@ -494,7 +347,6 @@ def main() -> None:
             services.stop_all()
             portal_server.should_exit = True
             portal_thread.join(timeout=3)
-
 
 if __name__ == "__main__":
     main()

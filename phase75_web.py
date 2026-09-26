@@ -172,23 +172,23 @@ PAGE = """<!doctype html>
 body { margin: 0; font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Microsoft YaHei", sans-serif; background: var(--bg); color: var(--text-main); display: flex; min-height: 100vh; }
 
 /* Sidebar */
-.sidebar { width: 220px; background: #0f172a; color: #cbd5e1; padding: 20px 12px; flex-shrink: 0; position: sticky; top: 0; height: 100vh; overflow-y: auto; }
+.sidebar { width: 220px; background: #0f172a; color: #cbd5e1; padding: 20px 12px; flex-shrink: 0; position: sticky; top: 0; height: 100vh; overflow-y: auto; display: flex; flex-direction: column; }
 .sidebar .logo { color: #fff; font-weight: 700; font-size: 15px; padding: 0 10px 18px 10px; border-bottom: 1px solid #1e293b; margin-bottom: 12px; }
 .sidebar a { display: flex; gap: 10px; align-items: center; padding: 10px 12px; border-radius: 8px; color: #cbd5e1; text-decoration: none; font-size: 14px; margin-bottom: 4px; }
 .sidebar a.active, .sidebar a:hover { background: #1e293b; color: #fff; }
-.sidebar a.home { margin-top: 24px; color: #94a3b8; border-top: 1px solid #1e293b; padding-top: 16px; }
+.sidebar a.home { margin-top: auto; color: #94a3b8; border-top: 1px solid #1e293b; padding-top: 16px; border-radius: 0; }
 
 /* Main Content */
-.main { flex: 1; padding: 24px 32px; overflow-x: hidden; }
+.main { flex: 1; padding: 24px 32px; overflow-x: hidden; min-width: 0; }
 .head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 24px; flex-wrap: wrap; gap: 16px; }
-.head h1 { margin: 0; font-size: 24px; display: flex; align-items: center; gap: 12px; }
+.head h1 { margin: 0; font-size: 24px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .badge { display: inline-block; padding: 4px 10px; border-radius: 99px; font-size: 12px; font-weight: 600; }
 .badge.green { background: #dcfce7; color: #166534; }
 .badge.gray { background: #e2e8f0; color: #475569; }
 .badge.amber { background: #fef3c7; color: #92400e; }
 .badge.blue { background: #dbeafe; color: #1e40af; }
 .badge.red { background: #fee2e2; color: #991b1b; }
-.lang-flow { color: var(--text-muted); font-size: 14px; margin-left: 12px; }
+.lang-flow { color: var(--text-muted); font-size: 14px; font-weight: normal; }
 
 /* Action Bar */
 .action-bar { display: flex; gap: 8px; flex-wrap: wrap; }
@@ -199,6 +199,7 @@ button.primary:hover { background: var(--primary-hover); }
 button.danger { color: var(--danger); border-color: #fecaca; }
 button.danger:hover { background: #fef2f2; }
 button:disabled { opacity: 0.5; cursor: not-allowed; }
+button.small { padding: 4px 10px; font-size: 12px; }
 
 /* Stats Grid */
 .stats-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 24px; }
@@ -210,38 +211,47 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 /* Cards & Panels */
 .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 20px 24px; margin-bottom: 24px; box-shadow: var(--shadow); }
 .card h3 { margin: 0 0 16px 0; font-size: 16px; display: flex; align-items: center; justify-content: space-between; }
-.card h3 .actions { display: flex; gap: 8px; }
 
 /* Tables */
 table { width: 100%; border-collapse: collapse; font-size: 14px; }
-th { text-align: left; color: var(--text-muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; padding: 10px 12px; border-bottom: 1px solid var(--border); background: #f8fafc; }
+th { text-align: left; color: var(--text-muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; padding: 10px 12px; border-bottom: 1px solid var(--border); background: #f8fafc; position: sticky; top: 0; z-index: 1; }
 td { padding: 12px; border-bottom: 1px solid var(--border); vertical-align: top; }
 tr:hover td { background: #f8fafc; }
 .muted { color: var(--text-muted); font-size: 13px; }
 
 /* Forms & Inputs */
-input, select, textarea { padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px; font-size: 14px; outline: none; font-family: inherit; }
+input, select, textarea { padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px; font-size: 14px; outline: none; font-family: inherit; background: #fff; }
 input:focus, select:focus, textarea:focus { border-color: var(--primary); box-shadow: 0 0 0 3px rgba(37,99,235,0.1); }
 textarea { resize: vertical; min-height: 60px; width: 100%; }
 .toolbar { display: flex; gap: 12px; margin-bottom: 16px; align-items: center; flex-wrap: wrap; }
 .toolbar input[type="text"] { flex: 1; min-width: 200px; }
 
 /* Terminal */
-.terminal { background: #0f172a; color: #a7f3d0; font-family: 'Consolas', 'Monaco', monospace; font-size: 13px; padding: 16px; border-radius: 8px; height: 240px; overflow-y: auto; white-space: pre-wrap; line-height: 1.5; }
+.terminal { background: #0f172a; color: #a7f3d0; font-family: 'Consolas', 'Monaco', monospace; font-size: 13px; padding: 16px; border-radius: 8px; height: 280px; overflow-y: auto; white-space: pre-wrap; line-height: 1.5; }
 
 /* Layout helpers */
 .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
 @media (max-width: 1024px) { .grid-2 { grid-template-columns: 1fr; } .stats-grid { grid-template-columns: repeat(2, 1fr); } }
 
-/* Pulse animation for running tasks */
+/* Pulse animation */
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
 .running { animation: pulse 1.5s cubic-bezier(0.4, 0, 0.6, 1) infinite; color: var(--info); font-weight: 600; }
+
+/* Modal */
+.modal-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 100; align-items: center; justify-content: center; }
+.modal-overlay.active { display: flex; }
+.modal { background: #fff; padding: 24px; border-radius: 12px; width: 480px; max-width: 90vw; box-shadow: 0 20px 25px -5px rgb(0 0 0 / 0.1); }
+.modal h3 { margin: 0 0 16px 0; font-size: 18px; }
+.modal .form-group { margin-bottom: 16px; }
+.modal label { display: block; font-size: 13px; font-weight: 500; margin-bottom: 6px; color: var(--text-muted); }
+.modal input, .modal select { width: 100%; }
+.modal .actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 24px; }
 </style>
 </head>
 <body>
   <div class="sidebar">
     <div class="logo">⌘ Developer Workspace</div>
-    <a href="__PORTAL_URL__">◫ 项目</a>
+    <a href="__PORTAL_URL__">◫ 项目列表</a>
     <a href="#" class="active">▤ Project Console</a>
     <a href="__PORTAL_URL__">⚙ Settings</a>
     <a href="__PORTAL_URL__" class="home">← 返回首页</a>
@@ -293,11 +303,11 @@ textarea { resize: vertical; min-height: 60px; width: 100%; }
     <!-- Tasks & Logs -->
     <div class="grid-2">
       <div class="card">
-        <h3>Tasks <button class="small" onclick="refreshTasks()" style="padding:4px 8px;font-size:12px;">Refresh</button></h3>
+        <h3>Tasks <button class="small" onclick="refreshTasks()">Refresh</button></h3>
         <table>
-          <thead><tr><th>Task</th><th>Progress</th><th>Status</th></tr></thead>
+          <thead><tr><th>Task</th><th>Message</th><th>Status</th></tr></thead>
           <tbody id="tasks_body">
-            <tr><td colspan="3" class="muted" style="text-align:center;">No tasks running</td></tr>
+            <tr><td colspan="3" class="muted" style="text-align:center;">No tasks yet</td></tr>
           </tbody>
         </table>
       </div>
@@ -327,19 +337,21 @@ textarea { resize: vertical; min-height: 60px; width: 100%; }
         <button class="primary" onclick="loadEntries()">Search</button>
         <button onclick="exportCsv()">Export CSV</button>
       </div>
-      <table>
-        <thead>
-          <tr>
-            <th style="width:25%">Source</th>
-            <th style="width:35%">Translation</th>
-            <th style="width:10%">Status</th>
-            <th style="width:5%">Lock</th>
-            <th style="width:15%">File</th>
-            <th style="width:10%">Actions</th>
-          </tr>
-        </thead>
-        <tbody id="entries_body"></tbody>
-      </table>
+      <div style="max-height: 600px; overflow-y: auto; border: 1px solid var(--border); border-radius: 8px;">
+        <table>
+          <thead>
+            <tr>
+              <th style="width:25%">Source</th>
+              <th style="width:35%">Translation</th>
+              <th style="width:10%">Status</th>
+              <th style="width:5%">Lock</th>
+              <th style="width:15%">File</th>
+              <th style="width:10%">Actions</th>
+            </tr>
+          </thead>
+          <tbody id="entries_body"></tbody>
+        </table>
+      </div>
       <div style="display:flex; justify-content:space-between; align-items:center; margin-top:16px;">
         <button id="btn_prev" onclick="prevPage()" disabled>← Previous</button>
         <span class="muted" id="page_info"></span>
@@ -348,9 +360,9 @@ textarea { resize: vertical; min-height: 60px; width: 100%; }
     </div>
   </div>
 
-  <!-- Modals (Hidden by default) -->
-  <div id="modal_overlay" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.5); z-index:100; display:none; align-items:center; justify-content:center;">
-    <div style="background:#fff; padding:24px; border-radius:12px; width:400px; max-width:90vw;" id="modal_content"></div>
+  <!-- Modals -->
+  <div class="modal-overlay" id="modal_overlay">
+    <div class="modal" id="modal_content"></div>
   </div>
 
 <script>
@@ -360,17 +372,16 @@ textarea { resize: vertical; min-height: 60px; width: 100%; }
   let totalEntries = 0;
   let pollingTimer = null;
 
-  // --- API Helper ---
-  async function api(url, method, body) {
+  async function api(url, method, body, isForm) {
     const opts = { method: method || "GET", headers: {} };
-    if (body) { opts.headers["Content-Type"] = "application/json"; opts.body = JSON.stringify(body); }
+    if (body && !isForm) { opts.headers["Content-Type"] = "application/json"; opts.body = JSON.stringify(body); }
+    if (body && isForm) { opts.body = body; }
     const res = await fetch(url, opts);
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data.detail || res.statusText);
     return data;
   }
 
-  // --- Initialization ---
   async function init() {
     await loadMeta();
     await loadEntries();
@@ -384,26 +395,24 @@ textarea { resize: vertical; min-height: 60px; width: 100%; }
       const stats = data.stats || {};
       
       document.getElementById("project_name").textContent = meta.name || "Unknown Project";
-      document.getElementById("lang_flow").textContent = `English → ${meta.target_language || "zh-CN"}`;
+      document.getElementById("lang_flow").textContent = `Source → ${meta.target_language || "zh-CN"}`;
       
       const total = Object.values(stats).reduce((a, b) => a + b, 0);
-      const translated = stats.machine_translated || 0;
-      const reviewed = stats.reviewed || 0;
+      const translated = (stats.machine_translated || 0) + (stats.reviewed || 0) + (stats.needs_review || 0);
       const errors = stats.error || 0;
       
       document.getElementById("stat_total").textContent = total.toLocaleString();
-      document.getElementById("stat_translated").textContent = `${translated + reviewed} translated`;
+      document.getElementById("stat_translated").textContent = `${translated} processed`;
       document.getElementById("stat_qa").textContent = errors;
       document.getElementById("stat_qa_err").textContent = `${errors} critical`;
       
-      const patchReady = total > 0 ? Math.round(((translated + reviewed) / total) * 100) : 0;
+      const patchReady = total > 0 ? Math.round((translated / total) * 100) : 0;
       document.getElementById("stat_patch").textContent = patchReady + "%";
     } catch (err) {
       console.error("Failed to load meta", err);
     }
   }
 
-  // --- Entries ---
   async function loadEntries() {
     const q = document.getElementById("search_q").value;
     const status = document.getElementById("filter_status").value;
@@ -412,7 +421,7 @@ textarea { resize: vertical; min-height: 60px; width: 100%; }
       totalEntries = data.total || 0;
       renderEntries(data.items || []);
       document.getElementById("entries_count").textContent = `${totalEntries.toLocaleString()} total`;
-      document.getElementById("page_info").textContent = `Showing ${currentOffset + 1}-${Math.min(currentOffset + pageSize, totalEntries)} of ${totalEntries}`;
+      document.getElementById("page_info").textContent = `Showing ${totalEntries === 0 ? 0 : currentOffset + 1}-${Math.min(currentOffset + pageSize, totalEntries)} of ${totalEntries}`;
       document.getElementById("btn_prev").disabled = currentOffset === 0;
       document.getElementById("btn_next").disabled = currentOffset + pageSize >= totalEntries;
     } catch (err) {
@@ -435,7 +444,7 @@ textarea { resize: vertical; min-height: 60px; width: 100%; }
         <td><span class="badge ${getStatusColor(e.status)}">${e.status}</span></td>
         <td style="text-align:center;"><input type="checkbox" class="lock-cb" data-id="${e.id}" ${e.locked ? "checked" : ""}></td>
         <td class="muted" style="font-size:12px;">${escapeHtml(e.file_path)}</td>
-        <td><button class="small" onclick="saveEntry('${e.id}')">Save</button></td>
+        <td><button class="small primary" onclick="saveEntry('${e.id}')">Save</button></td>
       `;
       tbody.appendChild(tr);
     });
@@ -446,6 +455,7 @@ textarea { resize: vertical; min-height: 60px; width: 100%; }
     if (s === "machine_translated") return "blue";
     if (s === "needs_review") return "amber";
     if (s === "error") return "red";
+    if (s === "locked") return "gray";
     return "gray";
   }
 
@@ -453,22 +463,32 @@ textarea { resize: vertical; min-height: 60px; width: 100%; }
     const row = document.querySelector(`textarea[data-id="${id}"]`).closest("tr");
     const target = row.querySelector(".target-text").value;
     const locked = row.querySelector(".lock-cb").checked;
+    const status = locked ? "locked" : "reviewed"; // Auto mark as reviewed if manually saved
+    
     try {
-      await api("/api/entries/update", "POST", { entry_id: id, target_text: target, locked: locked });
-      alert("Saved.");
+      await api("/api/entries/update", "POST", { 
+        entry_id: id, 
+        target_text: target, 
+        locked: locked,
+        status: status
+      });
       loadMeta();
+      loadEntries();
     } catch (err) { alert("Save failed: " + err); }
   }
 
   function prevPage() { currentOffset = Math.max(0, currentOffset - pageSize); loadEntries(); }
   function nextPage() { currentOffset += pageSize; loadEntries(); }
-  function exportCsv() { window.location.href = "/api/export/csv"; }
+  
+  function exportCsv() { 
+    const status = document.getElementById("filter_status").value;
+    window.location.href = "/api/export/csv?status=" + encodeURIComponent(status); 
+  }
 
-  // --- Tasks & Actions ---
   async function startTask(url, body) {
     try {
       const data = await api(url, "POST", body);
-      document.getElementById("log_terminal").textContent += `\\n[System] Task started: ${data.task_id}`;
+      appendLog(`[System] Task started: ${data.task_id}`);
       startPolling();
     } catch (err) { alert("Failed to start task: " + err); }
   }
@@ -486,27 +506,28 @@ textarea { resize: vertical; min-height: 60px; width: 100%; }
       tbody.innerHTML = "";
       
       let hasRunning = false;
-      items.slice(0, 5).forEach(t => {
-        if (t.status === "running") hasRunning = true;
-        const tr = document.createElement("tr");
-        tr.innerHTML = `
-          <td>${t.name}</td>
-          <td>-</td>
-          <td class="${t.status === 'running' ? 'running' : ''}">${t.status}</td>
-        `;
-        tr.style.cursor = "pointer";
-        tr.onclick = () => viewTaskLogs(t.id);
-        tbody.appendChild(tr);
-      });
-      
       if (items.length === 0) {
-        tbody.innerHTML = `<tr><td colspan="3" class="muted" style="text-align:center;">No tasks running</td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="3" class="muted" style="text-align:center;">No tasks yet</td></tr>`;
+      } else {
+        items.slice(0, 10).forEach(t => {
+          if (t.status === "running") hasRunning = true;
+          const tr = document.createElement("tr");
+          tr.innerHTML = `
+            <td><b>${t.name}</b><br><span class="muted" style="font-size:11px;">${t.created_at || ""}</span></td>
+            <td class="muted">${t.message || "-"}</td>
+            <td class="${t.status === 'running' ? 'running' : ''}">${t.status}</td>
+          `;
+          tr.style.cursor = "pointer";
+          tr.onclick = () => viewTaskLogs(t.id);
+          tbody.appendChild(tr);
+        });
       }
 
       if (!hasRunning && pollingTimer) {
         clearInterval(pollingTimer);
         pollingTimer = null;
-        loadMeta(); // Refresh stats when tasks finish
+        loadMeta(); 
+        loadEntries();
       }
     } catch (err) { console.error(err); }
   }
@@ -515,26 +536,48 @@ textarea { resize: vertical; min-height: 60px; width: 100%; }
     try {
       const task = await api(`/api/tasks/${taskId}`);
       document.getElementById("log_terminal").textContent = (task.logs || []).join("\\n");
+      document.getElementById("log_terminal").scrollTop = document.getElementById("log_terminal").scrollHeight;
     } catch (err) { console.error(err); }
   }
+  
+  function appendLog(msg) {
+    const terminal = document.getElementById("log_terminal");
+    terminal.textContent += "\\n" + msg;
+    terminal.scrollTop = terminal.scrollHeight;
+  }
 
-  // --- Modals ---
   function showModal(html) {
     document.getElementById("modal_content").innerHTML = html;
-    document.getElementById("modal_overlay").style.display = "flex";
+    document.getElementById("modal_overlay").classList.add("active");
   }
   function hideModal() {
-    document.getElementById("modal_overlay").style.display = "none";
+    document.getElementById("modal_overlay").classList.remove("active");
   }
 
-  function showTranslateModal() {
+  async function showTranslateModal() {
+    let providersHtml = '<option value="">Default (from config)</option>';
+    try {
+      const data = await api("/api/config/providers");
+      (data.items || []).forEach(p => {
+        const label = p.id + (p.has_api_key ? "" : " (no key)");
+        providersHtml += `<option value="${p.id}">${label}</option>`;
+      });
+    } catch(e) {}
+    
     showModal(`
       <h3>Translate Options</h3>
-      <p class="muted">Leave blank to use default provider from Settings.</p>
-      <div style="margin-bottom:12px;"><label>Provider</label><input type="text" id="m_provider" style="width:100%;margin-top:4px;"></div>
-      <div style="margin-bottom:12px;"><label>Model</label><input type="text" id="m_model" style="width:100%;margin-top:4px;"></div>
-      <div style="margin-bottom:16px;"><label><input type="checkbox" id="m_retranslate"> Force retranslate all</label></div>
-      <div style="display:flex;gap:8px;justify-content:flex-end;">
+      <div class="form-group">
+        <label>Provider</label>
+        <select id="m_provider">${providersHtml}</select>
+      </div>
+      <div class="form-group">
+        <label>Model (optional override)</label>
+        <input type="text" id="m_model" placeholder="Leave empty to use default">
+      </div>
+      <div class="form-group">
+        <label><input type="checkbox" id="m_retranslate"> Force retranslate all (ignore cache & reviewed)</label>
+      </div>
+      <div class="actions">
         <button onclick="hideModal()">Cancel</button>
         <button class="primary" onclick="doTranslate()">Start Translate</button>
       </div>
@@ -545,17 +588,33 @@ textarea { resize: vertical; min-height: 60px; width: 100%; }
     const body = {
       provider: document.getElementById("m_provider").value || null,
       model: document.getElementById("m_model").value || null,
-      retranslate: document.getElementById("m_retranslate").checked
+      retranslate: document.getElementById("m_retranslate").checked,
+      no_cache: false
     };
     hideModal();
     await startTask("/api/actions/translate", body);
   }
 
-  function showInstallModal() {
+  async function showInstallModal() {
+    let patchesHtml = '<option value="">-- select patch --</option>';
+    try {
+      const data = await api("/api/patches");
+      (data.items || []).forEach(p => {
+        patchesHtml += `<option value="${p.path}">${p.name}</option>`;
+      });
+    } catch(e) {}
+
     showModal(`
       <h3>Install Patch</h3>
-      <p class="muted">This will backup your game files and apply the latest patch.</p>
-      <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:24px;">
+      <p class="muted">This will backup your game files and apply the selected patch.</p>
+      <div class="form-group">
+        <label>Select Patch</label>
+        <select id="m_patch">${patchesHtml}</select>
+      </div>
+      <div class="form-group">
+        <label><input type="checkbox" id="m_force"> Force install (ignore hash mismatch)</label>
+      </div>
+      <div class="actions">
         <button onclick="hideModal()">Cancel</button>
         <button class="primary" onclick="doInstall()">Confirm Install</button>
       </div>
@@ -563,16 +622,34 @@ textarea { resize: vertical; min-height: 60px; width: 100%; }
   }
 
   async function doInstall() {
+    const patchPath = document.getElementById("m_patch").value;
+    if (!patchPath) { alert("Please select a patch."); return; }
+    const body = {
+      patch_path: patchPath,
+      force: document.getElementById("m_force").checked,
+      backup: true
+    };
     hideModal();
-    // Simplified: assumes latest patch. In real app, fetch patches and let user select.
-    alert("Please use the CLI or Workspace to select a specific patch to install for now.");
+    await startTask("/api/actions/install", body);
   }
 
-  function showRollbackModal() {
+  async function showRollbackModal() {
+    let backupsHtml = '<option value="">-- latest backup --</option>';
+    try {
+      const data = await api("/api/backups");
+      (data.items || []).forEach(b => {
+        backupsHtml += `<option value="${b.backup_id}">${b.backup_id} (${(b.files || []).length} files)</option>`;
+      });
+    } catch(e) {}
+
     showModal(`
       <h3>Rollback</h3>
-      <p class="muted">Restore game files to the state before the last patch was applied.</p>
-      <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:24px;">
+      <p class="muted">Restore game files to a previous backup state.</p>
+      <div class="form-group">
+        <label>Select Backup</label>
+        <select id="m_backup">${backupsHtml}</select>
+      </div>
+      <div class="actions">
         <button onclick="hideModal()">Cancel</button>
         <button class="danger" onclick="doRollback()">Confirm Rollback</button>
       </div>
@@ -580,15 +657,22 @@ textarea { resize: vertical; min-height: 60px; width: 100%; }
   }
 
   async function doRollback() {
+    const body = {
+      backup_id: document.getElementById("m_backup").value || null,
+      force: false
+    };
     hideModal();
-    await startTask("/api/actions/rollback", {});
+    await startTask("/api/actions/rollback", body);
   }
 
-  // --- Utils ---
   function escapeHtml(s) {
     if (!s) return "";
     return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
   }
+
+  document.getElementById("search_q").addEventListener("keydown", e => {
+    if (e.key === "Enter") { currentOffset = 0; loadEntries(); }
+  });
 
   init();
 </script>
@@ -633,8 +717,8 @@ def create_app(project_dir: Path) -> FastAPI:
 
     @app.get("/", response_class=HTMLResponse)
     def index() -> str:
-        require_project()
-        return PAGE
+        portal_url = os.environ.get("AGL_PORTAL_URL", "http://127.0.0.1:8300/")
+        return PAGE.replace("__PORTAL_URL__", portal_url)
 
     # ------------------------------------------------------------------
     # Project / entries APIs

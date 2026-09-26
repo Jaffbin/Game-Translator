@@ -12,476 +12,353 @@ from agl import config_manager
 
 
 PAGE = """<!doctype html>
-<html>
+<html lang="zh-CN">
 <head>
-  <meta charset="utf-8">
-  <title>AutoGame Localizer Settings</title>
-  <style>
-    body {
-      font-family: Arial, sans-serif;
-      margin: 16px;
-      background: #f7f7f7;
-    }
+<meta charset="utf-8">
+<title>Settings</title>
+<style>
+:root {
+  --bg: #f8fafc; --surface: #ffffff; --primary: #2563eb; --primary-hover: #1d4ed8;
+  --text-main: #0f172a; --text-muted: #64748b; --border: #e2e8f0;
+  --success: #10b981; --warning: #f59e0b; --danger: #ef4444;
+  --radius: 12px; --shadow: 0 4px 6px -1px rgb(0 0 0 / 0.05);
+}
+* { box-sizing: border-box; }
+body { margin: 0; font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Microsoft YaHei", sans-serif; background: var(--bg); color: var(--text-main); display: flex; min-height: 100vh; }
 
-    h1 {
-      margin: 0 0 12px 0;
-      font-size: 22px;
-    }
+/* Sidebar */
+.sidebar { width: 220px; background: #0f172a; color: #cbd5e1; padding: 20px 12px; flex-shrink: 0; position: sticky; top: 0; height: 100vh; overflow-y: auto; display: flex; flex-direction: column; }
+.sidebar .logo { color: #fff; font-weight: 700; font-size: 15px; padding: 0 10px 18px 10px; border-bottom: 1px solid #1e293b; margin-bottom: 12px; }
+.sidebar a { display: flex; gap: 10px; align-items: center; padding: 10px 12px; border-radius: 8px; color: #cbd5e1; text-decoration: none; font-size: 14px; margin-bottom: 4px; }
+.sidebar a.active, .sidebar a:hover { background: #1e293b; color: #fff; }
+.sidebar a.home { margin-top: auto; color: #94a3b8; border-top: 1px solid #1e293b; padding-top: 16px; border-radius: 0; }
 
-    h2 {
-      font-size: 16px;
-      margin: 0 0 8px 0;
-    }
+/* Main */
+.main { flex: 1; padding: 24px 32px; overflow-x: hidden; min-width: 0; max-width: 1000px; }
+.head { margin-bottom: 8px; }
+.head h1 { margin: 0; font-size: 24px; }
+.sub { color: var(--text-muted); font-size: 14px; margin: 0 0 24px 0; }
 
-    .panel {
-      background: #fff;
-      border: 1px solid #ddd;
-      padding: 10px;
-      margin-bottom: 12px;
-    }
+/* Tabs */
+.tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); margin-bottom: 24px; }
+.tab { padding: 10px 16px; background: none; border: none; border-bottom: 2px solid transparent; font-size: 14px; font-weight: 500; color: var(--text-muted); cursor: pointer; border-radius: 0; }
+.tab:hover { color: var(--text-main); background: none; }
+.tab.active { color: var(--primary); border-bottom-color: var(--primary); }
+.tab-content { display: none; }
+.tab-content.active { display: block; }
 
-    table {
-      width: 100%;
-      border-collapse: collapse;
-      background: #fff;
-    }
+/* Cards & Forms */
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 24px; margin-bottom: 24px; box-shadow: var(--shadow); }
+.card h3 { margin: 0 0 16px 0; font-size: 16px; }
+.form-grid { display: grid; grid-template-columns: 160px 1fr; gap: 12px 16px; align-items: center; margin-bottom: 16px; }
+.form-grid label { font-size: 13px; font-weight: 500; color: var(--text-muted); }
+.form-grid input, .form-grid select { width: 100%; max-width: 400px; padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px; font-size: 14px; outline: none; }
+.form-grid input:focus, .form-grid select:focus { border-color: var(--primary); box-shadow: 0 0 0 3px rgba(37,99,235,0.1); }
+.hint { font-size: 12px; color: var(--text-muted); margin: -8px 0 16px 0; }
 
-    th, td {
-      border: 1px solid #ddd;
-      padding: 6px;
-      font-size: 13px;
-      vertical-align: top;
-    }
+/* Buttons */
+button { padding: 8px 16px; border-radius: 8px; border: 1px solid var(--border); background: #fff; font-size: 13px; font-weight: 500; cursor: pointer; transition: all 0.15s; }
+button:hover { background: #f1f5f9; }
+.btn-primary { background: var(--primary); color: #fff; border-color: var(--primary); }
+.btn-primary:hover { background: var(--primary-hover); }
+.btn-secondary { background: #f1f5f9; color: var(--text-main); }
+.btn-danger { color: var(--danger); border-color: #fecaca; }
+.btn-danger:hover { background: #fef2f2; }
+button.small { padding: 4px 10px; font-size: 12px; }
 
-    th {
-      background: #efefef;
-      text-align: left;
-    }
+/* Tables */
+table { width: 100%; border-collapse: collapse; font-size: 14px; }
+th { text-align: left; color: var(--text-muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; padding: 10px 12px; border-bottom: 1px solid var(--border); background: #f8fafc; }
+td { padding: 12px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+.muted { color: var(--text-muted); font-size: 13px; }
 
-    input, select {
-      padding: 6px;
-      margin-right: 6px;
-    }
-
-    button {
-      padding: 6px 10px;
-      cursor: pointer;
-    }
-
-    .ok {
-      color: green;
-      font-weight: bold;
-    }
-
-    .error {
-      color: red;
-      font-weight: bold;
-    }
-
-    .small {
-      color: #666;
-      font-size: 12px;
-    }
-
-    .form-grid {
-      display: grid;
-      grid-template-columns: 180px 420px;
-      gap: 6px;
-      align-items: center;
-    }
-  </style>
+/* Badges */
+.badge { display: inline-block; padding: 2px 8px; border-radius: 99px; font-size: 11px; font-weight: 600; }
+.badge.green { background: #dcfce7; color: #166534; }
+.badge.gray { background: #e2e8f0; color: #475569; }
+</style>
 </head>
 <body>
-  <h1>AutoGame Localizer Settings</h1>
+  <div class="sidebar">
+    <div class="logo">⌘ Developer Workspace</div>
+    <a href="__PORTAL_URL__">◫ 项目列表</a>
+    <a href="__PORTAL_URL__">▤ Project Console</a>
+    <a href="#" class="active">⚙ Settings</a>
+    <a href="__PORTAL_URL__" class="home">← 返回首页</a>
+  </div>
 
-  <div class="panel">
-    <h2>General</h2>
-    <div>
-      <label>Default target language</label>
-      <input id="target_language" type="text" value="zh-CN">
-      <button onclick="saveGeneral()">Save General</button>
-      <span id="message"></span>
+  <div class="main">
+    <div class="head"><h1>⚙ Settings</h1></div>
+    <p class="sub">管理应用基础选项、Provider 连接与 API Key。敏感密钥只显示是否已配置，不显示明文。</p>
+
+    <div class="tabs">
+      <button class="tab active" onclick="showTab('general')">General</button>
+      <button class="tab" onclick="showTab('providers')">Providers</button>
+      <button class="tab" onclick="showTab('keys')">API Keys</button>
+    </div>
+
+    <!-- General Tab -->
+    <div id="tab-general" class="tab-content active">
+      <div class="card">
+        <h3>General Options</h3>
+        <div class="form-grid">
+          <label>Interface Language</label>
+          <select disabled><option>简体中文</option></select>
+          
+          <label>Default Target Language</label>
+          <select id="gen_target_lang">
+            <option value="zh-CN">简体中文</option>
+            <option value="zh-TW">繁体中文</option>
+            <option value="en">English</option>
+            <option value="ja">日本語</option>
+          </select>
+
+          <label>Backup Policy</label>
+          <select>
+            <option>Before Install / Patch</option>
+            <option>Before every translation run</option>
+            <option>Manual only</option>
+          </select>
+        </div>
+        <p class="hint">建议保留自动备份。Rollback 会依赖最近一次可用备份。</p>
+        <button class="btn-primary" onclick="saveGeneral()">Save Changes</button>
+      </div>
+    </div>
+
+    <!-- Providers Tab -->
+    <div id="tab-providers" class="tab-content">
+      <div class="card">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;">
+          <h3 style="margin:0;">Providers</h3>
+          <button class="btn-primary" onclick="newProvider()">+ Add Provider</button>
+        </div>
+        <table>
+          <thead><tr><th>ID</th><th>Type</th><th>Model</th><th>API Key Env</th><th>Status</th><th>Actions</th></tr></thead>
+          <tbody id="providers_body"></tbody>
+        </table>
+      </div>
+
+      <div class="card" id="editor_card" style="display:none;">
+        <h3>Provider Editor</h3>
+        <div class="form-grid">
+          <label>Provider ID</label>
+          <input type="text" id="p_id" placeholder="e.g. openrouter">
+          
+          <label>Type</label>
+          <select id="p_type">
+            <option value="openai_compatible">openai_compatible</option>
+            <option value="mock">mock</option>
+          </select>
+
+          <label>Base URL</label>
+          <input type="text" id="p_url" placeholder="https://api...">
+
+          <label>Model</label>
+          <input type="text" id="p_model" placeholder="model name">
+
+          <label>API Key Env Var</label>
+          <input type="text" id="p_env" placeholder="OPENROUTER_API_KEY">
+
+          <label>Timeout (s)</label>
+          <input type="number" id="p_timeout" value="60">
+
+          <label>Max Retries</label>
+          <input type="number" id="p_retries" value="3">
+
+          <label>Temperature</label>
+          <input type="number" step="0.1" id="p_temp" value="0.2">
+        </div>
+        <div style="display:flex; gap:8px; margin-top:16px; align-items:center;">
+          <button class="btn-primary" onclick="saveProvider()">Save Provider</button>
+          <button class="btn-secondary" onclick="testProvider()">Test Connection</button>
+          <button class="btn-danger" onclick="deleteProvider()">Delete</button>
+          <span id="editor_msg" class="muted" style="margin-left:auto;"></span>
+        </div>
+      </div>
+    </div>
+
+    <!-- API Keys Tab -->
+    <div id="tab-keys" class="tab-content">
+      <div class="card">
+        <h3>API Keys Status</h3>
+        <p class="hint">Secrets hidden. API Key 输入框始终使用 password 类型；界面只显示“已配置 / 未配置”，绝不展示明文。</p>
+        <table>
+          <thead><tr><th>Environment Variable</th><th>Status</th></tr></thead>
+          <tbody id="keys_body"></tbody>
+        </table>
+        
+        <h3 style="margin-top:24px;">Update Key</h3>
+        <div class="form-grid">
+          <label>Variable Name</label>
+          <input type="text" id="k_name" placeholder="NVIDIA_API_KEY">
+          
+          <label>Secret Value</label>
+          <input type="password" id="k_val" placeholder="••••••••••••">
+        </div>
+        <button class="btn-primary" style="margin-top:16px;" onclick="saveKey()">Save Key</button>
+      </div>
     </div>
   </div>
 
-  <div class="panel">
-    <h2>Providers</h2>
-    <table>
-      <thead>
-        <tr>
-          <th>ID</th>
-          <th>Type</th>
-          <th>Base URL</th>
-          <th>Model</th>
-          <th>API Key Env</th>
-          <th>Has Key</th>
-          <th>Actions</th>
-        </tr>
-      </thead>
-      <tbody id="providers"></tbody>
-    </table>
-  </div>
+<script>
+  async function api(url, method, body) {
+    const opts = { method: method || "GET", headers: {} };
+    if (body) { opts.headers["Content-Type"] = "application/json"; opts.body = JSON.stringify(body); }
+    const res = await fetch(url, opts);
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.detail || res.statusText);
+    return data;
+  }
 
-  <div class="panel">
-    <h2>Provider Editor</h2>
-    <div class="form-grid">
-      <div>Provider ID</div>
-      <input id="p_id" type="text" placeholder="nvidia / deepseek / openrouter">
+  function showTab(name) {
+    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+    document.querySelector(`.tab[onclick="showTab('${name}')"]`).classList.add('active');
+    document.getElementById('tab-' + name).classList.add('active');
+  }
 
-      <div>Type</div>
-      <select id="p_type">
-        <option value="openai_compatible">openai_compatible</option>
-        <option value="mock">mock</option>
-      </select>
+  async function loadAll() {
+    await loadConfig();
+    await loadKeys();
+  }
 
-      <div>Base URL</div>
-      <input id="p_base_url" type="text" placeholder="https://api.example.com/v1/chat/completions" style="width:520px;">
-
-      <div>Model</div>
-      <input id="p_model" type="text" placeholder="model name" style="width:520px;">
-
-      <div>API Key Env</div>
-      <input id="p_api_key_env" type="text" placeholder="OPENROUTER_API_KEY">
-
-      <div>Timeout seconds</div>
-      <input id="p_timeout" type="text" value="60">
-
-      <div>Max retries</div>
-      <input id="p_retries" type="text" value="3">
-
-      <div>Retry backoff seconds</div>
-      <input id="p_backoff" type="text" value="1.5">
-
-      <div>Temperature</div>
-      <input id="p_temperature" type="text" value="0.2">
-    </div>
-
-    <div style="margin-top:8px;">
-      <button onclick="newProvider()">New</button>
-      <button onclick="saveProvider()">Save Provider</button>
-      <button onclick="deleteCurrentProvider()">Delete Provider</button>
-      <button onclick="testCurrentProvider()">Test Provider</button>
-    </div>
-  </div>
-
-  <div class="panel">
-    <h2>API Keys (.env)</h2>
-    <table>
-      <thead>
-        <tr>
-          <th>Environment Variable</th>
-          <th>Has Value</th>
-        </tr>
-      </thead>
-      <tbody id="env_keys"></tbody>
-    </table>
-
-    <div style="margin-top:8px;">
-      <input id="env_key" type="text" placeholder="NVIDIA_API_KEY" style="width:260px;">
-      <input id="env_value" type="password" placeholder="API key" style="width:420px;">
-      <button onclick="saveEnvKey()">Save API Key</button>
-    </div>
-
-    <div class="small">
-      API keys are stored in local .env file. They are never shown in this page.
-    </div>
-  </div>
-
-  <script>
-    let providers = {};
-
-    function setMessage(text, kind) {
-      const el = document.getElementById("message");
-      el.textContent = text || "";
-      el.className = kind || "";
-    }
-
-    async function api(url, method = "GET", body = null) {
-      const options = {
-        method: method,
-        headers: {}
-      };
-
-      if (body !== null) {
-        options.headers["Content-Type"] = "application/json";
-        options.body = JSON.stringify(body);
-      }
-
-      const response = await fetch(url, options);
-      const data = await response.json().catch(() => ({}));
-
-      if (!response.ok) {
-        throw new Error(data.detail || response.statusText);
-      }
-
-      return data;
-    }
-
-    async function loadSettings() {
+  async function loadConfig() {
+    try {
       const data = await api("/api/settings/config");
-
-      document.getElementById("target_language").value =
-        (data.translation || {}).target_language || "zh-CN";
-
-      providers = data.providers || {};
-
-      renderProviders();
-      await loadEnvKeys();
-    }
-
-    function renderProviders() {
-      const tbody = document.getElementById("providers");
+      document.getElementById("gen_target_lang").value = data.translation?.target_language || "zh-CN";
+      
+      const tbody = document.getElementById("providers_body");
       tbody.innerHTML = "";
-
-      Object.entries(providers).forEach(([id, p]) => {
+      for (const [id, p] of Object.entries(data.providers || {})) {
         const tr = document.createElement("tr");
-
-        const tdId = document.createElement("td");
-        tdId.textContent = id;
-
-        const tdType = document.createElement("td");
-        tdType.textContent = p.type || "";
-
-        const tdBaseUrl = document.createElement("td");
-        tdBaseUrl.textContent = p.base_url || "";
-
-        const tdModel = document.createElement("td");
-        tdModel.textContent = p.model || "";
-
-        const tdEnv = document.createElement("td");
-        tdEnv.textContent = p.api_key_env || "";
-
-        const tdHasKey = document.createElement("td");
-        tdHasKey.textContent = p.has_api_key ? "yes" : "no";
-
-        const tdActions = document.createElement("td");
-
-        const editButton = document.createElement("button");
-        editButton.textContent = "Edit";
-        editButton.onclick = () => editProvider(id);
-
-        const testButton = document.createElement("button");
-        testButton.textContent = "Test";
-        testButton.onclick = () => testProvider(id);
-
-        tdActions.appendChild(editButton);
-        tdActions.appendChild(document.createTextNode(" "));
-        tdActions.appendChild(testButton);
-
-        tr.appendChild(tdId);
-        tr.appendChild(tdType);
-        tr.appendChild(tdBaseUrl);
-        tr.appendChild(tdModel);
-        tr.appendChild(tdEnv);
-        tr.appendChild(tdHasKey);
-        tr.appendChild(tdActions);
-
+        const status = p.has_api_key ? '<span class="badge green">已配置</span>' : '<span class="badge gray">未配置</span>';
+        tr.innerHTML = `
+          <td><b>${id}</b></td>
+          <td>${p.type}</td>
+          <td class="muted">${p.model || '-'}</td>
+          <td class="muted">${p.api_key_env || '-'}</td>
+          <td>${status}</td>
+          <td><button class="small" onclick='editProvider(${JSON.stringify(id)}, ${JSON.stringify(p)})'>Edit</button></td>
+        `;
         tbody.appendChild(tr);
-      });
-    }
+      }
+    } catch(e) { console.error(e); }
+  }
 
-    async function loadEnvKeys() {
+  async function loadKeys() {
+    try {
       const data = await api("/api/settings/env");
-
-      const tbody = document.getElementById("env_keys");
+      const tbody = document.getElementById("keys_body");
       tbody.innerHTML = "";
-
       (data.items || []).forEach(item => {
         const tr = document.createElement("tr");
-
-        const tdKey = document.createElement("td");
-        tdKey.textContent = item.key;
-
-        const tdHas = document.createElement("td");
-        tdHas.textContent = item.has_value ? "yes" : "no";
-
-        tr.appendChild(tdKey);
-        tr.appendChild(tdHas);
-
+        const status = item.has_value ? '<span class="badge green">已配置</span>' : '<span class="badge gray">未配置</span>';
+        tr.innerHTML = `<td><b>${item.key}</b></td><td>${status}</td>`;
         tbody.appendChild(tr);
       });
+    } catch(e) { console.error(e); }
+  }
 
-      const select = document.getElementById("env_key");
+  async function saveGeneral() {
+    try {
+      await api("/api/settings/general", "POST", { target_language: document.getElementById("gen_target_lang").value });
+      alert("Saved.");
+    } catch(e) { alert("Error: " + e); }
+  }
 
-      // Keep current value if user typed one.
-      const current = select.value;
+  function newProvider() {
+    document.getElementById("editor_card").style.display = "block";
+    document.getElementById("p_id").value = "";
+    document.getElementById("p_id").disabled = false;
+    document.getElementById("p_type").value = "openai_compatible";
+    document.getElementById("p_url").value = "";
+    document.getElementById("p_model").value = "";
+    document.getElementById("p_env").value = "";
+    document.getElementById("p_timeout").value = "60";
+    document.getElementById("p_retries").value = "3";
+    document.getElementById("p_temp").value = "0.2";
+    document.getElementById("editor_msg").textContent = "";
+    document.getElementById("editor_card").scrollIntoView({behavior: 'smooth'});
+  }
 
-      select.innerHTML = "";
+  function editProvider(id, p) {
+    document.getElementById("editor_card").style.display = "block";
+    document.getElementById("p_id").value = id;
+    document.getElementById("p_id").disabled = true; 
+    document.getElementById("p_type").value = p.type || "openai_compatible";
+    document.getElementById("p_url").value = p.base_url || "";
+    document.getElementById("p_model").value = p.model || "";
+    document.getElementById("p_env").value = p.api_key_env || "";
+    document.getElementById("p_timeout").value = p.timeout_seconds || 60;
+    document.getElementById("p_retries").value = p.max_retries || 3;
+    document.getElementById("p_temp").value = p.temperature || 0.2;
+    document.getElementById("editor_msg").textContent = "";
+    document.getElementById("editor_card").scrollIntoView({behavior: 'smooth'});
+  }
 
-      (data.items || []).forEach(item => {
-        const option = document.createElement("option");
-        option.value = item.key;
-        option.textContent = item.key;
-        select.appendChild(option);
-      });
+  async function saveProvider() {
+    const body = {
+      id: document.getElementById("p_id").value,
+      type: document.getElementById("p_type").value,
+      base_url: document.getElementById("p_url").value,
+      model: document.getElementById("p_model").value,
+      api_key_env: document.getElementById("p_env").value,
+      timeout_seconds: Number(document.getElementById("p_timeout").value),
+      max_retries: Number(document.getElementById("p_retries").value),
+      temperature: Number(document.getElementById("p_temp").value)
+    };
+    try {
+      await api("/api/settings/provider", "POST", body);
+      document.getElementById("editor_msg").textContent = "Saved!";
+      document.getElementById("editor_msg").style.color = "var(--success)";
+      loadConfig();
+      loadKeys();
+    } catch(e) { alert("Error: " + e); }
+  }
 
-      if (current) {
-        select.value = current;
-      }
+  async function deleteProvider() {
+    const id = document.getElementById("p_id").value;
+    if (!id) return;
+    if (!confirm("Delete " + id + "?")) return;
+    try {
+      await api("/api/settings/provider?id=" + encodeURIComponent(id), "DELETE");
+      document.getElementById("editor_card").style.display = "none";
+      loadConfig();
+      loadKeys();
+    } catch(e) { alert("Error: " + e); }
+  }
+
+  async function testProvider() {
+    const id = document.getElementById("p_id").value;
+    if (!id) return;
+    const msg = document.getElementById("editor_msg");
+    msg.textContent = "Testing...";
+    msg.style.color = "var(--text-muted)";
+    try {
+      const res = await api("/api/settings/provider/test", "POST", { provider_id: id });
+      msg.textContent = "OK: " + res.translated_text;
+      msg.style.color = "var(--success)";
+    } catch(e) { 
+      msg.textContent = "Failed: " + e; 
+      msg.style.color = "var(--danger)";
     }
+  }
 
-    async function saveGeneral() {
-      try {
-        const targetLanguage =
-          document.getElementById("target_language").value.trim();
+  async function saveKey() {
+    const key = document.getElementById("k_name").value;
+    const val = document.getElementById("k_val").value;
+    if (!key) { alert("Variable name required."); return; }
+    try {
+      await api("/api/settings/env", "POST", { key, value: val });
+      document.getElementById("k_val").value = "";
+      alert("Saved.");
+      loadKeys();
+      loadConfig();
+    } catch(e) { alert("Error: " + e); }
+  }
 
-        await api("/api/settings/general", "POST", {
-          target_language: targetLanguage
-        });
-
-        setMessage("General settings saved.", "ok");
-      } catch (err) {
-        setMessage(err.message, "error");
-      }
-    }
-
-    function newProvider() {
-      document.getElementById("p_id").value = "";
-      document.getElementById("p_type").value = "openai_compatible";
-      document.getElementById("p_base_url").value = "";
-      document.getElementById("p_model").value = "";
-      document.getElementById("p_api_key_env").value = "";
-      document.getElementById("p_timeout").value = "60";
-      document.getElementById("p_retries").value = "3";
-      document.getElementById("p_backoff").value = "1.5";
-      document.getElementById("p_temperature").value = "0.2";
-
-      setMessage("New provider form ready.", "");
-    }
-
-    function editProvider(id) {
-      const p = providers[id];
-
-      if (!p) {
-        return;
-      }
-
-      document.getElementById("p_id").value = id;
-      document.getElementById("p_type").value = p.type || "openai_compatible";
-      document.getElementById("p_base_url").value = p.base_url || "";
-      document.getElementById("p_model").value = p.model || "";
-      document.getElementById("p_api_key_env").value = p.api_key_env || "";
-      document.getElementById("p_timeout").value = p.timeout_seconds ?? 60;
-      document.getElementById("p_retries").value = p.max_retries ?? 3;
-      document.getElementById("p_backoff").value = p.retry_backoff_seconds ?? 1.5;
-      document.getElementById("p_temperature").value = p.temperature ?? 0.2;
-
-      setMessage("Editing provider: " + id, "");
-    }
-
-    async function saveProvider() {
-      const payload = {
-        id: document.getElementById("p_id").value.trim(),
-        type: document.getElementById("p_type").value,
-        base_url: document.getElementById("p_base_url").value.trim(),
-        model: document.getElementById("p_model").value.trim(),
-        api_key_env: document.getElementById("p_api_key_env").value.trim(),
-        timeout_seconds: Number(document.getElementById("p_timeout").value || 60),
-        max_retries: Number(document.getElementById("p_retries").value || 3),
-        retry_backoff_seconds: Number(document.getElementById("p_backoff").value || 1.5),
-        temperature: Number(document.getElementById("p_temperature").value || 0.2)
-      };
-
-      if (!payload.id) {
-        setMessage("Provider ID is required.", "error");
-        return;
-      }
-
-      try {
-        await api("/api/settings/provider", "POST", payload);
-
-        setMessage("Provider saved: " + payload.id, "ok");
-
-        await loadSettings();
-      } catch (err) {
-        setMessage(err.message, "error");
-      }
-    }
-
-    function currentProviderId() {
-      return document.getElementById("p_id").value.trim();
-    }
-
-    async function deleteCurrentProvider() {
-      const id = currentProviderId();
-
-      if (!id) {
-        setMessage("Provider ID is required.", "error");
-        return;
-      }
-
-      if (!confirm("Delete provider: " + id + "?")) {
-        return;
-      }
-
-      try {
-        await api("/api/settings/provider?id=" + encodeURIComponent(id), "DELETE");
-
-        setMessage("Provider deleted: " + id, "ok");
-
-        newProvider();
-        await loadSettings();
-      } catch (err) {
-        setMessage(err.message, "error");
-      }
-    }
-
-    async function testProvider(id) {
-      try {
-        setMessage("Testing provider: " + id + "...", "");
-
-        const data = await api("/api/settings/provider/test", "POST", {
-          provider_id: id
-        });
-
-        setMessage(
-          "Test OK: " + data.translated_text,
-          "ok"
-        );
-      } catch (err) {
-        setMessage("Test failed: " + err.message, "error");
-      }
-    }
-
-    function testCurrentProvider() {
-      const id = currentProviderId();
-
-      if (!id) {
-        setMessage("Provider ID is required.", "error");
-        return;
-      }
-
-      testProvider(id);
-    }
-
-    async function saveEnvKey() {
-      const key = document.getElementById("env_key").value.trim();
-      const value = document.getElementById("env_value").value;
-
-      if (!key) {
-        setMessage("Environment variable name is required.", "error");
-        return;
-      }
-
-      try {
-        await api("/api/settings/env", "POST", {
-          key: key,
-          value: value
-        });
-
-        setMessage("Saved environment variable: " + key, "ok");
-
-        document.getElementById("env_value").value = "";
-
-        await loadEnvKeys();
-        await loadSettings();
-      } catch (err) {
-        setMessage(err.message, "error");
-      }
-    }
-
-    loadSettings();
-  </script>
+  loadAll();
+</script>
 </body>
 </html>
 """
@@ -506,7 +383,8 @@ def create_settings_app() -> FastAPI:
 
     @app.get("/", response_class=HTMLResponse)
     def index() -> str:
-        return PAGE
+        portal_url = os.environ.get("AGL_PORTAL_URL", "http://127.0.0.1:8300/")
+        return PAGE.replace("__PORTAL_URL__", portal_url)
 
     @app.get("/api/settings/config")
     def api_settings_config():
