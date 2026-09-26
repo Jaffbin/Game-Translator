@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import socket
 import subprocess
 import sys
@@ -12,6 +13,8 @@ import uvicorn
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.responses import Response as StarletteResponse
 
 from agl.user_settings import (
     load_user_settings,
@@ -41,42 +44,27 @@ def find_free_port(start_port: int, max_attempts: int = 200) -> int:
     for port in range(start_port, start_port + max_attempts):
         if not is_port_open(port):
             return port
-
-    raise RuntimeError(
-        f"No free port found between {start_port} "
-        f"and {start_port + max_attempts - 1}"
-    )
+    raise RuntimeError(f"No free port found between {start_port} and {start_port + max_attempts - 1}")
 
 
 def resolve_port(preferred_port: int) -> int:
-    if not is_port_open(preferred_port):
-        return preferred_port
-
-    return find_free_port(preferred_port + 1)
+    return preferred_port if not is_port_open(preferred_port) else find_free_port(preferred_port + 1)
 
 
 def wait_for_port(port: int, timeout_seconds: float = 15.0) -> bool:
     start = time.time()
-
     while time.time() - start < timeout_seconds:
         if is_port_open(port):
             return True
-
         time.sleep(0.15)
-
     return False
 
 
 # ----------------------------------------------------------------------
-# Native folder dialog (no pywebview, no tkinter, thread-safe)
+# Native folder dialog (PowerShell, thread-safe)
 # ----------------------------------------------------------------------
 
 def select_folder_native() -> str:
-    """
-    Open a native folder picker using PowerShell (Windows only).
-
-    Runs in a subprocess, so it is safe to call from any thread.
-    """
     if not sys.platform.startswith("win"):
         return ""
 
@@ -95,374 +83,253 @@ def select_folder_native() -> str:
             text=True,
             timeout=180,
         )
-
         return (result.stdout or "").strip()
-
     except Exception as exc:
         print(f"Folder dialog error: {exc}")
         return ""
 
 
 # ----------------------------------------------------------------------
-# Portal page (first-run wizard + main menu)
+# Shared design system CSS
 # ----------------------------------------------------------------------
+
+SHARED_CSS = """
+:root {
+  --bg: #f8fafc; --surface: #ffffff; --primary: #2563eb; --primary-hover: #1d4ed8;
+  --text-main: #0f172a; --text-muted: #64748b; --border: #e2e8f0;
+  --success: #10b981; --warning: #f59e0b; --danger: #ef4444;
+  --radius: 12px; --shadow: 0 4px 6px -1px rgb(0 0 0 / 0.05), 0 2px 4px -2px rgb(0 0 0 / 0.05);
+}
+* { box-sizing: border-box; }
+body { font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Microsoft YaHei", sans-serif; background: var(--bg); color: var(--text-main); margin: 0; }
+.center-body { display: flex; align-items: center; justify-content: center; min-height: 100vh; }
+.container { width: 860px; max-width: 92vw; }
+h1 { font-size: 32px; margin: 0 0 8px 0; letter-spacing: -0.5px; }
+.sub { color: var(--text-muted); margin: 0 0 32px 0; font-size: 16px; }
+.badge { display: inline-block; padding: 2px 10px; border-radius: 99px; font-size: 12px; font-weight: 600; background: #dbeafe; color: var(--primary); vertical-align: middle; margin-left: 8px; }
+.badge.green { background: #dcfce7; color: #166534; }
+.badge.gray { background: #e2e8f0; color: #475569; }
+.cards { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 24px; }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 24px; cursor: pointer; transition: all 0.2s; }
+.card:hover { border-color: var(--primary); box-shadow: var(--shadow); transform: translateY(-2px); }
+.card h3 { margin: 0 0 12px 0; font-size: 20px; display: flex; align-items: center; gap: 8px; }
+.card p { margin: 0 0 12px 0; color: var(--text-muted); font-size: 14px; line-height: 1.6; }
+.card ul { margin: 0; padding-left: 18px; color: var(--text-muted); font-size: 13px; line-height: 1.8; }
+.menu-row { display: flex; align-items: center; gap: 14px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px 20px; margin-bottom: 12px; cursor: pointer; transition: all 0.15s; }
+.menu-row:hover { border-color: var(--primary); box-shadow: var(--shadow); }
+.menu-row .icon { font-size: 20px; }
+.menu-row .title { font-weight: 600; font-size: 15px; }
+.menu-row .desc { color: var(--text-muted); font-size: 13px; }
+.actions { display: flex; gap: 12px; align-items: center; margin-top: 8px; }
+button { padding: 10px 20px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface); font-size: 14px; font-weight: 500; cursor: pointer; transition: all 0.2s; }
+button:hover { background: #f1f5f9; }
+button.primary { background: var(--primary); color: white; border-color: var(--primary); }
+button.primary:hover { background: var(--primary-hover); }
+.muted { font-size: 13px; color: var(--text-muted); }
+.hidden { display: none; }
+#warning { color: #991b1b; background: #fef2f2; border: 1px solid #fecaca; border-radius: 8px; padding: 10px 14px; margin-bottom: 18px; font-size: 14px; }
+"""
+
 
 PORTAL_PAGE = """<!doctype html>
-<html>
+<html lang="zh-CN">
 <head>
-  <meta charset="utf-8">
-  <title>AutoGame Localizer</title>
-  <style>
-    body {
-      margin: 0;
-      font-family: "Segoe UI", Arial, sans-serif;
-      background: linear-gradient(135deg, #eef2ff, #e2e8f0);
-      min-height: 100vh;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-    }
-
-    .container {
-      width: 900px;
-      max-width: calc(100vw - 40px);
-      background: rgba(255,255,255,0.92);
-      border: 1px solid #cbd5e1;
-      border-radius: 18px;
-      padding: 34px;
-      box-shadow: 0 18px 50px rgba(15, 23, 42, 0.16);
-    }
-
-    h1 { margin: 0 0 8px 0; font-size: 34px; color: #0f172a; }
-
-    p.sub { margin: 0 0 22px 0; color: #475569; font-size: 15px; }
-
-    .cards { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
-
-    .card {
-      border: 1px solid #cbd5e1;
-      border-radius: 14px;
-      padding: 22px;
-      background: #fff;
-      cursor: pointer;
-      transition: 0.15s ease;
-    }
-
-    .card:hover {
-      transform: translateY(-2px);
-      box-shadow: 0 10px 24px rgba(15, 23, 42, 0.10);
-      border-color: #93c5fd;
-    }
-
-    .card h2 { margin: 0 0 10px 0; font-size: 21px; color: #111827; }
-    .card p { margin: 0; color: #475569; font-size: 14px; line-height: 1.55; }
-
-    .actions { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 20px; }
-
-    button {
-      border: 0;
-      border-radius: 10px;
-      padding: 11px 16px;
-      font-size: 14px;
-      cursor: pointer;
-    }
-
-    button.primary { background: #2563eb; color: #fff; }
-    button.secondary { background: #475569; color: #fff; }
-    button.ghost { background: #e2e8f0; color: #111827; }
-
-    .small { margin-top: 18px; color: #64748b; font-size: 12px; }
-    .hidden { display: none; }
-
-    .badge {
-      display: inline-block;
-      margin-left: 8px;
-      padding: 3px 8px;
-      border-radius: 999px;
-      background: #dbeafe;
-      color: #1d4ed8;
-      font-size: 12px;
-      vertical-align: middle;
-    }
-
-    #browser_warning {
-      color: #b91c1c;
-      font-weight: bold;
-      margin-bottom: 16px;
-      padding: 10px;
-      background: #fee2e2;
-      border-radius: 8px;
-    }
-  </style>
+<meta charset="utf-8">
+<title>AutoGame Localizer</title>
+<style>__CSS__</style>
 </head>
-<body>
+<body class="center-body">
   <div class="container">
-    <h1>AutoGame Localizer</h1>
-    <p class="sub">本地游戏翻译工具</p>
+    <h1>AutoGame Localizer <span class="badge">DESKTOP WEB · PYWEBVIEW</span></h1>
+    <p class="sub">让游戏本地化，变得简单。</p>
 
-    <div id="browser_warning" class="hidden"></div>
+    <div id="warning" class="hidden"></div>
 
+    <!-- First run -->
     <div id="mode_select" class="hidden">
-      <h2 style="margin:0 0 14px 0; font-size:22px;">请选择使用模式</h2>
-
       <div class="cards">
         <div class="card" onclick="chooseMode('simple')">
-          <h2>我是普通玩家</h2>
-          <p>
-            简单模式。<br><br>
-            只需要选择游戏、开始翻译、应用补丁。<br>
-            不需要了解项目、QA、CSV、provider 等概念。
-          </p>
+          <h3>▶ 普通玩家模式 <span class="badge green">推荐</span></h3>
+          <p>隐藏技术细节，只保留"选择 → 翻译 → 应用"这条清晰路径。</p>
+          <ul><li>✓ 选择游戏文件夹</li><li>✓ 查看翻译进度与日志</li><li>✓ 应用或恢复原始文件</li></ul>
         </div>
-
         <div class="card" onclick="chooseMode('advanced')">
-          <h2>我是译者 / 开发者</h2>
-          <p>
-            开发者模式。<br><br>
-            可以管理项目、审校文本、导入导出 CSV、运行 QA、
-            查看补丁预览、配置翻译服务。
-          </p>
+          <h3>⌘ 译者 · 开发者模式</h3>
+          <p>提供完整项目工作区、扫描、QA、Patch、Install、Rollback 与条目审校能力。</p>
+          <ul><li>✓ 项目与 Provider 管理</li><li>✓ 条目级审校与锁定</li><li>✓ Patch 预览与任务日志</li></ul>
         </div>
       </div>
-
-      <div class="small">之后可以随时重新选择模式。</div>
+      <div class="actions">
+        <button class="primary" onclick="chooseMode('simple')">进入普通模式 →</button>
+        <button onclick="chooseMode('advanced')">进入开发者工作区</button>
+      </div>
     </div>
 
+    <!-- Home menu -->
     <div id="home" class="hidden">
-      <h2 style="margin:0 0 14px 0; font-size:22px;">
-        主菜单
-        <span id="current_mode" class="badge"></span>
-      </h2>
-
-      <div class="actions">
-        <button class="primary" onclick="openMode('simple')">进入普通模式</button>
-        <button class="secondary" onclick="openMode('advanced')">进入开发者模式</button>
-        <button class="secondary" onclick="openMode('settings')">打开设置</button>
-        <button class="ghost" onclick="resetMode()">重新选择模式</button>
+      <div class="menu-row" onclick="openMode('simple')">
+        <span class="icon">▣</span>
+        <span><span class="title">开始工作</span><br><span class="desc">选择游戏并开始翻译</span></span>
+        <span class="badge" id="current_mode" style="margin-left:auto;"></span>
       </div>
-
-      <div class="small">
-        普通模式适合一键翻译。开发者模式适合人工审校和社区翻译项目。
+      <div class="menu-row" onclick="openMode('advanced')">
+        <span class="icon">◫</span>
+        <span><span class="title">项目</span><br><span class="desc">管理本地化项目与工作区</span></span>
+      </div>
+      <div class="menu-row" onclick="openMode('settings')">
+        <span class="icon">⚙</span>
+        <span><span class="title">设置</span><br><span class="desc">通用选项与 Provider API Key</span></span>
+      </div>
+      <div class="actions">
+        <button onclick="resetMode()">重新选择模式</button>
+        <span class="muted">普通模式适合一键翻译；开发者模式适合人工审校与社区协作。</span>
       </div>
     </div>
   </div>
 
-  <script>
-    function show(id) {
-      document.getElementById("mode_select").classList.add("hidden");
-      document.getElementById("home").classList.add("hidden");
-      document.getElementById(id).classList.remove("hidden");
+<script>
+function show(id) {
+  document.getElementById("mode_select").classList.add("hidden");
+  document.getElementById("home").classList.add("hidden");
+  document.getElementById(id).classList.remove("hidden");
+}
+function warn(text) {
+  const el = document.getElementById("warning");
+  el.textContent = text;
+  el.classList.remove("hidden");
+}
+async function api(url, method, body) {
+  const opts = { method: method || "GET", headers: {} };
+  if (body) { opts.headers["Content-Type"] = "application/json"; opts.body = JSON.stringify(body); }
+  const res = await fetch(url, opts);
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.detail || res.statusText);
+  return data;
+}
+async function init() {
+  try {
+    const s = await api("/api/settings");
+    if (!s.first_run_completed) { show("mode_select"); }
+    else {
+      document.getElementById("current_mode").textContent =
+        s.ui_mode === "simple" ? "普通模式" : s.ui_mode === "advanced" ? "开发者模式" : "";
+      show("home");
     }
-
-    function showWarning(text) {
-      const el = document.getElementById("browser_warning");
-      el.textContent = text;
-      el.classList.remove("hidden");
-    }
-
-    async function api(url, method, body) {
-      const options = { method: method || "GET", headers: {} };
-
-      if (body !== null && body !== undefined) {
-        options.headers["Content-Type"] = "application/json";
-        options.body = JSON.stringify(body);
-      }
-
-      const response = await fetch(url, options);
-      const data = await response.json().catch(() => ({}));
-
-      if (!response.ok) {
-        throw new Error(data.detail || response.statusText);
-      }
-
-      return data;
-    }
-
-    async function init() {
-      try {
-        const settings = await api("/api/settings");
-
-        if (!settings.first_run_completed) {
-          show("mode_select");
-        } else {
-          const modeText = settings.ui_mode === "simple"
-            ? "普通模式"
-            : settings.ui_mode === "advanced"
-              ? "开发者模式"
-              : "未选择";
-
-          document.getElementById("current_mode").textContent = modeText;
-          show("home");
-        }
-      } catch (err) {
-        showWarning("加载设置失败: " + err);
-      }
-    }
-
-    async function chooseMode(mode) {
-      try {
-        const data = await api("/api/choose_mode", "POST", { mode: mode });
-        window.location.href = data.url;
-      } catch (err) {
-        alert("选择模式失败: " + err);
-      }
-    }
-
-    async function openMode(mode) {
-      try {
-        const data = await api("/api/open_mode", "POST", { mode: mode });
-        window.location.href = data.url;
-      } catch (err) {
-        alert("打开模式失败: " + err);
-      }
-    }
-
-    async function resetMode() {
-      try {
-        await api("/api/reset_mode", "POST");
-        window.location.href = "/?r=" + Date.now();
-      } catch (err) {
-        alert("重置失败: " + err);
-      }
-    }
-
-    window.addEventListener("load", init);
-  </script>
+  } catch (err) { warn("加载设置失败: " + err); }
+}
+async function chooseMode(mode) {
+  try { window.location.href = (await api("/api/choose_mode", "POST", { mode: mode })).url; }
+  catch (err) { warn("启动失败: " + err); }
+}
+async function openMode(mode) {
+  try { window.location.href = (await api("/api/open_mode", "POST", { mode: mode })).url; }
+  catch (err) { warn("启动失败: " + err); }
+}
+async function resetMode() {
+  try { await api("/api/reset_mode", "POST"); window.location.href = "/?r=" + Date.now(); }
+  catch (err) { warn("重置失败: " + err); }
+}
+window.addEventListener("load", init);
+</script>
 </body>
 </html>
-"""
+""".replace("__CSS__", SHARED_CSS)
 
-
-# ----------------------------------------------------------------------
-# Simple mode desktop page (toolbar + iframe)
-# ----------------------------------------------------------------------
 
 SIMPLE_DESKTOP_PAGE = """<!doctype html>
-<html>
+<html lang="zh-CN">
 <head>
-  <meta charset="utf-8">
-  <title>AutoGame Localizer Simple Mode</title>
-  <style>
-    html, body {
-      margin: 0;
-      padding: 0;
-      width: 100%;
-      height: 100%;
-      overflow: hidden;
-      font-family: "Segoe UI", Arial, sans-serif;
-    }
-
-    #toolbar {
-      height: 52px;
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      padding: 0 12px;
-      background: #e5e7eb;
-      border-bottom: 1px solid #cbd5e1;
-      box-sizing: border-box;
-    }
-
-    #toolbar button {
-      padding: 8px 14px;
-      font-size: 14px;
-      border: 0;
-      border-radius: 6px;
-      cursor: pointer;
-    }
-
-    #chooseBtn { background: #2563eb; color: #fff; }
-    #homeBtn { background: #475569; color: #fff; }
-
-    #status {
-      color: #475569;
-      font-size: 13px;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      max-width: 680px;
-    }
-
-    #frame {
-      width: 100%;
-      height: calc(100vh - 52px);
-      border: 0;
-      display: block;
-    }
-  </style>
+<meta charset="utf-8">
+<title>普通玩家模式</title>
+<style>
+:root {
+  --bg: #f8fafc; --surface: #ffffff; --primary: #2563eb;
+  --text-main: #0f172a; --text-muted: #64748b; --border: #e2e8f0;
+}
+html, body { margin: 0; height: 100%; font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Microsoft YaHei", sans-serif; background: var(--bg); color: var(--text-main); }
+.topbar { height: 56px; background: var(--surface); border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 12px; padding: 0 20px; }
+.topbar .title { font-weight: 700; font-size: 16px; }
+.topbar button { padding: 8px 16px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface); font-size: 13px; cursor: pointer; }
+.topbar button.primary { background: var(--primary); color: #fff; border-color: var(--primary); }
+.topbar a { margin-left: auto; color: var(--text-muted); font-size: 13px; text-decoration: none; }
+.topbar a:hover { color: var(--primary); }
+#status { font-size: 13px; color: var(--text-muted); max-width: 420px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+iframe { width: 100%; height: calc(100% - 56px); border: 0; display: block; }
+</style>
 </head>
 <body>
-  <div id="toolbar">
-    <button id="chooseBtn" onclick="chooseFolder()">选择游戏文件夹</button>
-    <button id="homeBtn" onclick="goHome()">返回首页</button>
-    <div id="status">简单模式</div>
+  <div class="topbar">
+    <span class="title">▶ 普通玩家模式</span>
+    <button class="primary" onclick="chooseFolder()">选择游戏文件夹</button>
+    <span id="status">简单模式</span>
+    <a href="__PORTAL_URL__">← 返回首页</a>
   </div>
-
   <iframe id="frame" src="/"></iframe>
-
-  <script>
-    const PORTAL_URL = "__PORTAL_URL__";
-
-    function setStatus(message) {
-      document.getElementById("status").textContent = message;
-    }
-
-    async function chooseFolder() {
-      try {
-        setStatus("正在打开文件夹选择窗口...");
-
-        const response = await fetch("/api/select_folder", { method: "POST" });
-        const data = await response.json();
-
-        if (!data.path) {
-          setStatus("未选择文件夹。");
-          return;
-        }
-
-        const doc = document.getElementById("frame").contentDocument;
-
-        if (!doc) {
-          setStatus("无法访问内部页面。");
-          return;
-        }
-
-        const input = doc.getElementById("game_path");
-
-        if (!input) {
-          setStatus("找不到游戏路径输入框。");
-          return;
-        }
-
-        input.value = data.path;
-        setStatus("已选择：" + data.path);
-
-      } catch (err) {
-        setStatus("选择文件夹失败：" + err);
-      }
-    }
-
-    function goHome() {
-      window.location.href = PORTAL_URL;
-    }
-
-    window.addEventListener("load", function () {
-      setStatus("简单模式就绪。");
-    });
-  </script>
+<script>
+function setStatus(m) { document.getElementById("status").textContent = m; }
+async function chooseFolder() {
+  try {
+    setStatus("正在打开文件夹选择窗口...");
+    const res = await fetch("/api/select_folder", { method: "POST" });
+    const data = await res.json();
+    if (!data.path) { setStatus("未选择文件夹。"); return; }
+    const doc = document.getElementById("frame").contentDocument;
+    const input = doc && doc.getElementById("game_path");
+    if (!input) { setStatus("找不到路径输入框。"); return; }
+    input.value = data.path;
+    setStatus("已选择：" + data.path);
+  } catch (err) { setStatus("选择文件夹失败：" + err); }
+}
+</script>
 </body>
 </html>
 """
+
+
+# ----------------------------------------------------------------------
+# Home button injection for advanced / settings pages
+# ----------------------------------------------------------------------
+
+HOME_BUTTON_HTML = """
+<div style="position:fixed;top:10px;right:14px;z-index:99999;">
+  <a href="__PORTAL_URL__"
+     style="display:inline-block;padding:8px 14px;background:#475569;color:#fff;border-radius:8px;text-decoration:none;font-size:13px;box-shadow:0 2px 8px rgba(0,0,0,0.25);">
+    ← 返回首页
+  </a>
+</div>
+"""
+
+
+class HomeButtonMiddleware(BaseHTTPMiddleware):
+    def __init__(self, app, portal_url: str):
+        super().__init__(app)
+        self.portal_url = portal_url
+
+    async def dispatch(self, request, call_next):
+        response = await call_next(request)
+        if "text/html" not in response.headers.get("content-type", ""):
+            return response
+
+        body = b"".join([chunk async for chunk in response.body_iterator])
+        try:
+            text = body.decode("utf-8")
+        except UnicodeDecodeError:
+            return StarletteResponse(content=body, status_code=response.status_code, media_type=response.media_type)
+
+        button = HOME_BUTTON_HTML.replace("__PORTAL_URL__", self.portal_url)
+        if "</body>" in text:
+            text = text.replace("</body>", button + "</body>", 1)
+        else:
+            text += button
+
+        return StarletteResponse(content=text, status_code=response.status_code, media_type="text/html; charset=utf-8")
 
 
 # ----------------------------------------------------------------------
 # Service manager
 # ----------------------------------------------------------------------
 
-MODE_DEFAULT_PORTS = {
-    "simple": 8310,
-    "advanced": 8320,
-    "settings": 8330,
-}
+MODE_DEFAULT_PORTS = {"simple": 8310, "advanced": 8320, "settings": 8330}
 
 
 class ServiceManager:
@@ -471,6 +338,8 @@ class ServiceManager:
         self.services: Dict[str, Dict[str, Any]] = {}
 
     def _create_app(self, mode: str) -> Tuple[FastAPI, str]:
+        os.environ["AGL_PORTAL_URL"] = self.portal_url
+
         if mode == "simple":
             app = create_simple_app()
             portal_url = self.portal_url
@@ -489,53 +358,36 @@ class ServiceManager:
             try:
                 from phase11_workspace import create_workspace_app
             except ImportError as exc:
-                raise RuntimeError(
-                    "开发者模式需要 phase11_workspace.py。请先完成 Phase 11。"
-                ) from exc
+                raise RuntimeError("开发者模式需要 phase11_workspace.py。") from exc
 
-            return create_workspace_app(), "/"
+            app = create_workspace_app()
+            app.add_middleware(HomeButtonMiddleware, portal_url=self.portal_url)
+            return app, "/"
 
         if mode == "settings":
             try:
                 from phase12_settings import create_settings_app
             except ImportError as exc:
-                raise RuntimeError(
-                    "设置页面需要 phase12_settings.py。请先完成 Phase 12。"
-                ) from exc
+                raise RuntimeError("设置页面需要 phase12_settings.py。") from exc
 
-            return create_settings_app(), "/"
+            app = create_settings_app()
+            app.add_middleware(HomeButtonMiddleware, portal_url=self.portal_url)
+            return app, "/"
 
         raise ValueError(f"Unknown mode: {mode}")
 
     def start(self, mode: str) -> str:
         existing = self.services.get(mode)
-
         if existing is not None:
             server = existing.get("server")
             thread = existing.get("thread")
-
-            if (
-                server is not None
-                and thread is not None
-                and thread.is_alive()
-                and not getattr(server, "should_exit", False)
-            ):
+            if server is not None and thread is not None and thread.is_alive() and not getattr(server, "should_exit", False):
                 return existing["url"]
 
         app, suffix = self._create_app(mode)
+        port = resolve_port(MODE_DEFAULT_PORTS.get(mode, 8400))
 
-        preferred_port = MODE_DEFAULT_PORTS.get(mode, 8400)
-        port = resolve_port(preferred_port)
-
-        config = uvicorn.Config(
-            app,
-            host="127.0.0.1",
-            port=port,
-            log_level="warning",
-        )
-
-        server = uvicorn.Server(config)
-
+        server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning"))
         thread = threading.Thread(target=server.run, daemon=True)
         thread.start()
 
@@ -544,34 +396,21 @@ class ServiceManager:
             raise RuntimeError(f"Failed to start service for mode: {mode}")
 
         url = f"http://127.0.0.1:{port}{suffix}"
-
-        self.services[mode] = {
-            "server": server,
-            "thread": thread,
-            "port": port,
-            "url": url,
-        }
-
+        self.services[mode] = {"server": server, "thread": thread, "port": port, "url": url}
         return url
 
     def stop_all(self) -> None:
         for info in self.services.values():
-            server = info.get("server")
-
-            if server is not None:
-                server.should_exit = True
-
+            if info.get("server") is not None:
+                info["server"].should_exit = True
         for info in self.services.values():
-            thread = info.get("thread")
-
-            if thread is not None:
-                thread.join(timeout=2)
-
+            if info.get("thread") is not None:
+                info["thread"].join(timeout=2)
         self.services.clear()
 
 
 # ----------------------------------------------------------------------
-# Portal app (HTTP API, no pywebview js_api)
+# Portal app
 # ----------------------------------------------------------------------
 
 class ModeRequest(BaseModel):
@@ -593,26 +432,19 @@ def create_portal_app(services: ServiceManager) -> FastAPI:
     def api_choose_mode(body: ModeRequest):
         if body.mode not in {"simple", "advanced"}:
             raise HTTPException(status_code=400, detail="Invalid mode.")
-
         set_ui_mode(body.mode)
-        url = services.start(body.mode)
-
-        return {"url": url}
+        return {"url": services.start(body.mode)}
 
     @app.post("/api/open_mode")
     def api_open_mode(body: ModeRequest):
         if body.mode not in {"simple", "advanced", "settings"}:
             raise HTTPException(status_code=400, detail="Invalid mode.")
-
         if body.mode in {"simple", "advanced"}:
-            settings = load_user_settings()
-            settings["ui_mode"] = body.mode
-            settings["first_run_completed"] = True
-            save_user_settings(settings)
-
-        url = services.start(body.mode)
-
-        return {"url": url}
+            s = load_user_settings()
+            s["ui_mode"] = body.mode
+            s["first_run_completed"] = True
+            save_user_settings(s)
+        return {"url": services.start(body.mode)}
 
     @app.post("/api/reset_mode")
     def api_reset_mode():
@@ -627,35 +459,17 @@ def create_portal_app(services: ServiceManager) -> FastAPI:
 # ----------------------------------------------------------------------
 
 def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="UI Phase 3: unified launcher with mode selection"
-    )
-
+    parser = argparse.ArgumentParser(description="UI Phase 3 launcher")
     parser.add_argument("--portal-port", type=int, default=8300)
     parser.add_argument("--debug", action="store_true")
-    parser.add_argument(
-        "--no-window",
-        action="store_true",
-        help="Do not open pywebview window; use browser only",
-    )
-
+    parser.add_argument("--no-window", action="store_true")
     args = parser.parse_args()
 
     portal_port = resolve_port(args.portal_port)
     portal_url = f"http://127.0.0.1:{portal_port}/"
 
     services = ServiceManager(portal_url)
-    portal_app = create_portal_app(services)
-
-    portal_config = uvicorn.Config(
-        portal_app,
-        host="127.0.0.1",
-        port=portal_port,
-        log_level="warning",
-    )
-
-    portal_server = uvicorn.Server(portal_config)
-
+    portal_server = uvicorn.Server(uvicorn.Config(create_portal_app(services), host="127.0.0.1", port=portal_port, log_level="warning"))
     portal_thread = threading.Thread(target=portal_server.run, daemon=True)
     portal_thread.start()
 
@@ -663,33 +477,16 @@ def main() -> None:
         portal_server.should_exit = True
         sys.exit("Portal server did not start in time.")
 
-    print("Opening AutoGame Localizer Launcher")
     print(f"Portal: {portal_url}")
 
-    use_window = (
-        webview is not None
-        and not args.no_window
-    )
-
-    if use_window:
-        window = webview.create_window(
-            title="AutoGame Localizer",
-            url=portal_url,
-            width=1220,
-            height=860,
-            min_size=(1000, 700),
-        )
-
+    if webview is not None and not args.no_window:
+        webview.create_window(title="AutoGame Localizer", url=portal_url, width=1220, height=860, min_size=(1000, 700))
         webview.start(debug=args.debug)
-
         services.stop_all()
         portal_server.should_exit = True
         portal_thread.join(timeout=3)
-
     else:
-        print("pywebview window disabled or unavailable.")
-        print("Open the portal in your browser. Press Ctrl+C to stop.")
-
+        print("Browser mode. Ctrl+C to stop.")
         try:
             while True:
                 time.sleep(1)

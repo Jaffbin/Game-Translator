@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import argparse
 import datetime
 import threading
@@ -314,353 +315,221 @@ class StartRequest(BaseModel):
 # ----------------------------------------------------------------------
 
 PAGE = """<!doctype html>
-<html>
+<html lang="zh-CN">
 <head>
   <meta charset="utf-8">
-  <title>AutoGame Localizer 简单模式</title>
+  <title>普通玩家模式</title>
   <style>
-    body {
-      font-family: "Segoe UI", Arial, sans-serif;
-      margin: 0;
-      background: #f2f4f8;
+    :root {
+      --bg: #f8fafc; --surface: #ffffff; --primary: #2563eb; --primary-hover: #1d4ed8;
+      --text-main: #0f172a; --text-muted: #64748b; --border: #e2e8f0;
+      --success: #10b981; --warning: #f59e0b; --danger: #ef4444;
+      --radius: 12px; --shadow: 0 4px 6px -1px rgb(0 0 0 / 0.05);
     }
+    body { font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Microsoft YaHei", sans-serif; background: var(--bg); color: var(--text-main); margin: 0; padding: 0; }
+    
+    /* Top Bar */
+    .topbar { background: var(--surface); border-bottom: 1px solid var(--border); padding: 16px 32px; display: flex; align-items: center; justify-content: space-between; }
+    .topbar h2 { margin: 0; font-size: 18px; display: flex; align-items: center; gap: 8px; }
+    .back-btn { text-decoration: none; color: var(--text-muted); font-size: 14px; display: flex; align-items: center; gap: 4px; }
+    .back-btn:hover { color: var(--primary); }
 
-    .container {
-      max-width: 980px;
-      margin: 24px auto;
-      padding: 0 16px;
-    }
+    /* Layout */
+    .container { max-width: 800px; margin: 40px auto; padding: 0 20px; }
+    
+    /* Steps Indicator */
+    .steps { display: flex; justify-content: space-between; margin-bottom: 40px; position: relative; }
+    .steps::before { content: ''; position: absolute; top: 15px; left: 0; right: 0; height: 2px; background: var(--border); z-index: 0; }
+    .step { background: var(--bg); padding: 0 12px; z-index: 1; text-align: center; flex: 1; }
+    .step-num { width: 32px; height: 32px; border-radius: 50%; background: var(--surface); border: 2px solid var(--border); display: flex; align-items: center; justify-content: center; margin: 0 auto 8px; font-weight: bold; color: var(--text-muted); }
+    .step.active .step-num { border-color: var(--primary); color: var(--primary); background: #eff6ff; }
+    .step.done .step-num { border-color: var(--success); background: var(--success); color: white; }
+    .step-label { font-size: 13px; color: var(--text-muted); font-weight: 500; }
+    .step.active .step-label { color: var(--primary); font-weight: 600; }
 
-    h1 {
-      font-size: 28px;
-      margin-bottom: 16px;
-    }
+    /* Cards */
+    .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 32px; box-shadow: var(--shadow); margin-bottom: 24px; }
+    .card h3 { margin: 0 0 16px 0; font-size: 20px; display: flex; align-items: center; gap: 12px; }
+    .card h3 .icon { font-size: 24px; }
+    
+    /* Form Elements */
+    .input-group { display: flex; gap: 12px; margin-bottom: 16px; }
+    input[type="text"] { flex: 1; padding: 12px 16px; border: 1px solid var(--border); border-radius: 8px; font-size: 15px; outline: none; transition: border 0.2s; }
+    input[type="text"]:focus { border-color: var(--primary); box-shadow: 0 0 0 3px rgba(37,99,235,0.1); }
+    select { padding: 12px 16px; border: 1px solid var(--border); border-radius: 8px; font-size: 15px; background: white; }
+    
+    button { padding: 12px 24px; border-radius: 8px; border: none; font-size: 15px; font-weight: 600; cursor: pointer; transition: all 0.2s; }
+    .btn-primary { background: var(--primary); color: white; }
+    .btn-primary:hover { background: var(--primary-hover); }
+    .btn-primary:disabled { background: #94a3b8; cursor: not-allowed; }
+    .btn-danger { background: white; color: var(--danger); border: 1px solid var(--danger); }
+    .btn-danger:hover { background: #fef2f2; }
+    .btn-secondary { background: #f1f5f9; color: var(--text-main); border: 1px solid var(--border); }
 
-    .card {
-      background: #fff;
-      border: 1px solid #d8dee8;
-      border-radius: 10px;
-      padding: 16px;
-      margin-bottom: 16px;
-      box-shadow: 0 2px 6px rgba(0,0,0,0.05);
-    }
+    /* Status & Logs */
+    .status-box { padding: 16px; border-radius: 8px; margin-bottom: 16px; font-weight: 500; }
+    .status-idle { background: #f1f5f9; color: var(--text-muted); }
+    .status-running { background: #eff6ff; color: var(--primary); }
+    .status-done { background: #dcfce7; color: #166534; }
+    .status-error { background: #fef2f2; color: #991b1b; }
+    
+    .log-terminal { background: #0f172a; color: #a7f3d0; font-family: 'Consolas', monospace; font-size: 13px; padding: 16px; border-radius: 8px; height: 200px; overflow-y: auto; white-space: pre-wrap; margin-top: 16px; }
+    
+    .progress-bar { height: 6px; background: #e2e8f0; border-radius: 3px; overflow: hidden; margin: 12px 0; }
+    .progress-fill { height: 100%; background: var(--primary); width: 0%; transition: width 0.3s; }
+    .progress-fill.indeterminate { width: 30%; animation: indeterminate 1.5s infinite linear; }
+    @keyframes indeterminate { 0% { transform: translateX(-100%); } 100% { transform: translateX(400%); } }
 
-    .card h2 {
-      margin: 0 0 12px 0;
-      font-size: 18px;
-    }
-
-    input[type=text] {
-      width: 620px;
-      max-width: 100%;
-      padding: 10px;
-      font-size: 15px;
-      border: 1px solid #bbb;
-      border-radius: 6px;
-    }
-
-    select {
-      padding: 10px;
-      font-size: 15px;
-      border: 1px solid #bbb;
-      border-radius: 6px;
-      margin-left: 8px;
-    }
-
-    button {
-      padding: 10px 16px;
-      font-size: 15px;
-      border: 0;
-      border-radius: 6px;
-      cursor: pointer;
-      margin-left: 8px;
-    }
-
-    button.primary {
-      background: #2563eb;
-      color: #fff;
-    }
-
-    button.danger {
-      background: #b91c1c;
-      color: #fff;
-    }
-
-    button.secondary {
-      background: #475569;
-      color: #fff;
-    }
-
-    button:disabled {
-      opacity: 0.5;
-      cursor: not-allowed;
-    }
-
-    #state_text {
-      font-size: 20px;
-      font-weight: bold;
-      margin-bottom: 10px;
-    }
-
-    #log {
-      height: 280px;
-      overflow: auto;
-      background: #0f172a;
-      color: #d1fae5;
-      font-family: Consolas, monospace;
-      font-size: 12px;
-      padding: 10px;
-      border-radius: 8px;
-      white-space: pre-wrap;
-    }
-
-    .small {
-      color: #555;
-      font-size: 13px;
-      margin-top: 8px;
-    }
-
-    .warning {
-      color: #b45309;
-      font-weight: bold;
-    }
-
-    .ok {
-      color: #166534;
-      font-weight: bold;
-    }
-
-    .error {
-      color: #b91c1c;
-      font-weight: bold;
-    }
+    .hint { font-size: 13px; color: var(--text-muted); margin-top: 8px; }
   </style>
 </head>
 <body>
+  <div class="topbar">
+    <h2>▶ 普通玩家模式</h2>
+    <a href="__PORTAL_URL__" class="back-btn">← 返回首页</a>
+  </div>
+
   <div class="container">
-    <h1>AutoGame Localizer</h1>
+    <!-- Steps Indicator -->
+    <div class="steps">
+      <div class="step active" id="step1">
+        <div class="step-num">1</div>
+        <div class="step-label">选择游戏</div>
+      </div>
+      <div class="step" id="step2">
+        <div class="step-num">2</div>
+        <div class="step-label">自动翻译</div>
+      </div>
+      <div class="step" id="step3">
+        <div class="step-num">3</div>
+        <div class="step-label">应用结果</div>
+      </div>
+    </div>
 
-    <div class="card">
-      <h2>1. 选择游戏</h2>
-
-      <div>
-        <input id="game_path" type="text" placeholder="请粘贴游戏文件夹路径，例如 D:\\Games\\MyGame">
-
+    <!-- Step 1: Select Game -->
+    <div class="card" id="card1">
+      <h3><span class="icon">⌂</span> 选择游戏文件夹</h3>
+      <p style="color:var(--text-muted); margin-bottom:20px;">选择包含游戏资源文件的文件夹，建议使用游戏安装目录。</p>
+      <div class="input-group">
+        <input type="text" id="game_path" placeholder="尚未选择文件夹，例如 D:\\Games\\MyRPGGame">
         <select id="target_language">
           <option value="zh-CN">简体中文</option>
           <option value="en">English</option>
           <option value="ja">日本語</option>
         </select>
-
-        <button id="start_btn" class="primary" onclick="start()">开始翻译</button>
       </div>
-
-      <div id="service" class="small">正在检查翻译服务...</div>
-      <div class="small">
-        注意：请选择游戏文件夹，不要选择 .exe 文件。
-      </div>
+      <button class="btn-primary" id="start_btn" onclick="startTranslation()">开始翻译 →</button>
+      <div class="hint">注意：请选择游戏文件夹，不要选择 .exe 文件。</div>
     </div>
 
-    <div class="card">
-      <h2>2. 翻译状态</h2>
-      <div id="state_text">等待开始</div>
-      <pre id="log"></pre>
+    <!-- Step 2: Translation Status -->
+    <div class="card" id="card2" style="display:none;">
+      <h3><span class="icon">✦</span> 自动翻译中</h3>
+      <div class="status-box status-running" id="status_text">等待开始...</div>
+      <div class="progress-bar"><div class="progress-fill indeterminate" id="progress_fill"></div></div>
+      <div class="log-terminal" id="log"></div>
     </div>
 
-    <div class="card">
-      <h2>3. 应用到游戏</h2>
-      <div id="patch_info" class="small"></div>
-
-      <div style="margin-top:10px;">
-        <button id="apply_btn" class="secondary" onclick="applyPatch()" disabled>应用到游戏</button>
-        <button id="restore_btn" class="danger" onclick="restore()" disabled>恢复原始文件</button>
+    <!-- Step 3: Apply -->
+    <div class="card" id="card3" style="display:none;">
+      <h3><span class="icon">✓</span> 翻译完成</h3>
+      <p style="color:var(--text-muted); margin-bottom:24px;">补丁已生成。你可以将修改应用到游戏，系统会自动备份原始文件。</p>
+      <div style="display:flex; gap:12px;">
+        <button class="btn-primary" id="apply_btn" onclick="applyPatch()">应用到游戏</button>
+        <button class="btn-danger" id="restore_btn" onclick="restore()">恢复原始文件</button>
       </div>
-
-      <div class="small">
-        应用到游戏前会自动备份原文件。恢复原始文件会使用最近一次备份。
-      </div>
+      <div class="hint">安全提示：应用或恢复都会先询问一次，避免误修改游戏文件。</div>
     </div>
   </div>
 
   <script>
+    const PORTAL_URL = "__PORTAL_URL__";
     let polling = false;
 
-    function busyState(state) {
-      return state === "running" || state === "applying" || state === "restoring";
-    }
-
-    function friendlyState(state) {
-      if (state === "idle") return "等待开始";
-      if (state === "running") return "正在处理...";
-      if (state === "done") return "翻译完成";
-      if (state === "warning") return "完成，但有提醒";
-      if (state === "error") return "出现问题";
-      if (state === "applying") return "正在应用补丁...";
-      if (state === "applied") return "已应用到游戏";
-      if (state === "restoring") return "正在恢复原始文件...";
-      if (state === "restored") return "已恢复原始文件";
-      return state;
-    }
-
-    async function api(url, method = "GET", body = null) {
-      const options = {
-        method: method,
-        headers: {}
-      };
-
-      if (body !== null) {
-        options.headers["Content-Type"] = "application/json";
-        options.body = JSON.stringify(body);
+    function showStep(n) {
+      document.getElementById('card1').style.display = n === 1 ? 'block' : 'none';
+      document.getElementById('card2').style.display = n === 2 ? 'block' : 'none';
+      document.getElementById('card3').style.display = n === 3 ? 'block' : 'none';
+      
+      for(let i=1; i<=3; i++) {
+        const el = document.getElementById('step' + i);
+        el.classList.remove('active', 'done');
+        if (i < n) el.classList.add('done');
+        if (i === n) el.classList.add('active');
       }
-
-      const response = await fetch(url, options);
-      const data = await response.json().catch(() => ({}));
-
-      if (!response.ok) {
-        throw new Error(data.detail || response.statusText);
-      }
-
-      return data;
     }
 
-    async function refreshService() {
+    async function api(url, method, body) {
+      const opts = { method: method || "GET", headers: {} };
+      if (body) { opts.headers["Content-Type"] = "application/json"; opts.body = JSON.stringify(body); }
+      const res = await fetch(url, opts);
+      if (!res.ok) throw new Error((await res.json()).detail || res.statusText);
+      return res.json();
+    }
+
+    async function startTranslation() {
+      const path = document.getElementById('game_path').value.trim();
+      const lang = document.getElementById('target_language').value;
+      if (!path) { alert("请先输入或选择游戏文件夹路径。"); return; }
+      
+      document.getElementById('start_btn').disabled = true;
+      showStep(2);
+      
       try {
-        const data = await api("/api/service");
-
-        const el = document.getElementById("service");
-
-        if (data.is_mock) {
-          el.innerHTML =
-            "<span class='warning'>当前没有配置真实翻译服务，处于测试模式。生成的翻译不是真正中文。</span>";
-        } else {
-          el.innerHTML =
-            "<span class='ok'>翻译服务已配置：" + data.provider_id + "</span>";
-        }
+        await api("/api/start", "POST", { game_path: path, target_language: lang });
+        startPolling();
       } catch (err) {
-        document.getElementById("service").textContent =
-          "无法检查翻译服务: " + err.message;
+        alert("启动失败: " + err);
+        showStep(1);
+        document.getElementById('start_btn').disabled = false;
       }
     }
 
-    async function refreshState() {
+    async function applyPatch() {
+      if (!confirm("确定要应用到游戏吗？\\n系统会自动备份原文件。")) return;
+      try {
+        await api("/api/apply", "POST");
+        alert("应用成功！");
+      } catch (err) { alert("应用失败: " + err); }
+    }
+
+    async function restore() {
+      if (!confirm("确定要恢复原始文件吗？")) return;
+      try {
+        await api("/api/restore", "POST");
+        alert("恢复成功！");
+      } catch (err) { alert("恢复失败: " + err); }
+    }
+
+    function startPolling() {
+      if (polling) return;
+      polling = true;
+      pollState();
+    }
+
+    async function pollState() {
       try {
         const state = await api("/api/state");
-        renderState(state);
+        document.getElementById('status_text').innerText = state.step + ": " + state.message;
+        document.getElementById('log').innerText = state.logs.join("\\n");
+        document.getElementById('log').scrollTop = document.getElementById('log').scrollHeight;
 
-        if (busyState(state.state)) {
-          setTimeout(refreshState, 1500);
-        } else {
+        if (state.state === 'done' || state.state === 'applied' || state.state === 'restored') {
+          showStep(3);
           polling = false;
+        } else if (state.state === 'error') {
+          document.getElementById('status_text').className = 'status-box status-error';
+          polling = false;
+          showStep(1);
+          document.getElementById('start_btn').disabled = false;
+        } else {
+          setTimeout(pollState, 1500);
         }
       } catch (err) {
         console.error(err);
         polling = false;
       }
     }
-
-    function startPolling() {
-      if (!polling) {
-        polling = true;
-        refreshState();
-      }
-    }
-
-    function renderState(state) {
-      const stateText = document.getElementById("state_text");
-      const log = document.getElementById("log");
-      const patchInfo = document.getElementById("patch_info");
-
-      const startBtn = document.getElementById("start_btn");
-      const applyBtn = document.getElementById("apply_btn");
-      const restoreBtn = document.getElementById("restore_btn");
-
-      const busy = busyState(state.state);
-
-      let text = friendlyState(state.state);
-
-      if (state.step) {
-        text += " - " + state.step;
-      }
-
-      if (state.message) {
-        text += "\\n" + state.message;
-      }
-
-      stateText.textContent = text;
-
-      if (state.state === "error") {
-        stateText.className = "error";
-      } else if (state.state === "warning") {
-        stateText.className = "warning";
-      } else if (state.state === "done" || state.state === "applied" || state.state === "restored") {
-        stateText.className = "ok";
-      } else {
-        stateText.className = "";
-      }
-
-      log.textContent = (state.logs || []).join("\\n");
-      log.scrollTop = log.scrollHeight;
-
-      if (state.patch) {
-        patchInfo.textContent = "补丁位置：" + state.patch;
-      } else {
-        patchInfo.textContent = "还没有生成补丁。";
-      }
-
-      startBtn.disabled = busy;
-      applyBtn.disabled = busy || !state.patch;
-      restoreBtn.disabled = busy || !state.project_dir;
-    }
-
-    async function start() {
-      const gamePath = document.getElementById("game_path").value.trim();
-      const targetLanguage = document.getElementById("target_language").value;
-
-      if (!gamePath) {
-        alert("请先粘贴游戏文件夹路径。");
-        return;
-      }
-
-      try {
-        await api("/api/start", "POST", {
-          game_path: gamePath,
-          target_language: targetLanguage
-        });
-
-        startPolling();
-      } catch (err) {
-        alert(err.message);
-      }
-    }
-
-    async function applyPatch() {
-      if (!confirm("将把翻译补丁应用到游戏。\\n系统会先自动备份原文件。\\n确定继续吗？")) {
-        return;
-      }
-
-      try {
-        await api("/api/apply", "POST");
-        startPolling();
-      } catch (err) {
-        alert(err.message);
-      }
-    }
-
-    async function restore() {
-      if (!confirm("确定要恢复原始文件吗？")) {
-        return;
-      }
-
-      try {
-        await api("/api/restore", "POST");
-        startPolling();
-      } catch (err) {
-        alert(err.message);
-      }
-    }
-
-    refreshService();
-    refreshState();
   </script>
 </body>
 </html>
@@ -676,7 +545,8 @@ def create_simple_app() -> FastAPI:
 
     @app.get("/", response_class=HTMLResponse)
     def index() -> str:
-        return PAGE
+        portal_url = os.environ.get("AGL_PORTAL_URL", "http://127.0.0.1:8300/")
+        return PAGE.replace("__PORTAL_URL__", portal_url)
 
     @app.get("/api/state")
     def api_state():
