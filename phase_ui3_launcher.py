@@ -6,7 +6,7 @@ import socket
 import sys
 import threading
 import time
-from typing import Any, Dict, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 import uvicorn
 from fastapi import FastAPI, HTTPException
@@ -19,6 +19,7 @@ from agl.user_settings import (
     save_user_settings,
     set_ui_mode,
 )
+from phase_ui1_simple import create_simple_app
 
 try:
     import webview
@@ -28,7 +29,6 @@ except ImportError:
 # ----------------------------------------------------------------------
 # Network helpers
 # ----------------------------------------------------------------------
-
 def is_port_open(port: int) -> bool:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.settimeout(0.2)
@@ -52,20 +52,14 @@ def wait_for_port(port: int, timeout_seconds: float = 15.0) -> bool:
     return False
 
 # ----------------------------------------------------------------------
-# Portal Page (HTML + CSS + JS)
+# Shared CSS & Portal HTML
 # ----------------------------------------------------------------------
-
-PORTAL_PAGE = """<!doctype html>
-<html lang="zh-CN">
-<head>
-<meta charset="utf-8">
-<title>AutoGame Localizer</title>
-<style>
+SHARED_CSS = """
 :root {
   --bg: #f8fafc; --surface: #ffffff; --primary: #2563eb; --primary-hover: #1d4ed8;
   --text-main: #0f172a; --text-muted: #64748b; --border: #e2e8f0;
   --success: #10b981; --warning: #f59e0b; --danger: #ef4444;
-  --radius: 12px; --shadow: 0 4px 6px -1px rgb(0 0 0 / 0.05), 0 2px 4px -2px rgb(0 0 0 / 0.05);
+  --radius: 12px; --shadow: 0 4px 6px -1px rgb(0 0 0 / 0.05);
 }
 * { box-sizing: border-box; }
 body { font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Microsoft YaHei", sans-serif; background: var(--bg); color: var(--text-main); margin: 0; display: flex; align-items: center; justify-content: center; min-height: 100vh; }
@@ -74,7 +68,6 @@ h1 { font-size: 32px; margin: 0 0 8px 0; letter-spacing: -0.5px; }
 .sub { color: var(--text-muted); margin: 0 0 32px 0; font-size: 16px; }
 .badge { display: inline-block; padding: 2px 10px; border-radius: 99px; font-size: 12px; font-weight: 600; background: #dbeafe; color: var(--primary); vertical-align: middle; margin-left: 8px; }
 .badge.green { background: #dcfce7; color: #166534; }
-.badge.gray { background: #e2e8f0; color: #475569; }
 .cards { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 24px; }
 .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 24px; cursor: pointer; transition: all 0.2s; }
 .card:hover { border-color: var(--primary); box-shadow: var(--shadow); transform: translateY(-2px); }
@@ -93,17 +86,15 @@ button.primary { background: var(--primary); color: white; border-color: var(--p
 button.primary:hover { background: var(--primary-hover); }
 .muted { font-size: 13px; color: var(--text-muted); }
 .hidden { display: none; }
-#warning { color: #991b1b; background: #fef2f2; border: 1px solid #fecaca; border-radius: 8px; padding: 10px 14px; margin-bottom: 18px; font-size: 14px; }
-</style>
-</head>
+"""
+
+PORTAL_PAGE = """<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><title>AutoGame Localizer</title>
+<style>__CSS__</style></head>
 <body>
   <div class="container">
     <h1>AutoGame Localizer <span class="badge">DESKTOP WEB</span></h1>
     <p class="sub">让游戏本地化，变得简单。</p>
-
-    <div id="warning" class="hidden"></div>
-
-    <!-- First run -->
     <div id="mode_select" class="hidden">
       <div class="cards">
         <div class="card" onclick="chooseMode('simple')">
@@ -122,8 +113,6 @@ button.primary:hover { background: var(--primary-hover); }
         <button onclick="chooseMode('advanced')">进入开发者工作区</button>
       </div>
     </div>
-
-    <!-- Home menu -->
     <div id="home" class="hidden">
       <div class="menu-row" onclick="openMode('simple')">
         <span class="icon">▣</span>
@@ -140,22 +129,11 @@ button.primary:hover { background: var(--primary-hover); }
       </div>
       <div class="actions">
         <button onclick="resetMode()">重新选择模式</button>
-        <span class="muted">普通模式适合一键翻译；开发者模式适合人工审校与社区协作。</span>
       </div>
     </div>
   </div>
-
 <script>
-function show(id) {
-  document.getElementById("mode_select").classList.add("hidden");
-  document.getElementById("home").classList.add("hidden");
-  document.getElementById(id).classList.remove("hidden");
-}
-function warn(text) {
-  const el = document.getElementById("warning");
-  el.textContent = text;
-  el.classList.remove("hidden");
-}
+function show(id) { document.getElementById("mode_select").classList.add("hidden"); document.getElementById("home").classList.add("hidden"); document.getElementById(id).classList.remove("hidden"); }
 async function api(url, method, body) {
   const opts = { method: method || "GET", headers: {} };
   if (body) { opts.headers["Content-Type"] = "application/json"; opts.body = JSON.stringify(body); }
@@ -169,39 +147,23 @@ async function init() {
     const s = await api("/api/settings");
     if (!s.first_run_completed) { show("mode_select"); }
     else {
-      document.getElementById("current_mode").textContent =
-        s.ui_mode === "simple" ? "普通模式" : s.ui_mode === "advanced" ? "开发者模式" : "";
+      document.getElementById("current_mode").textContent = s.ui_mode === "simple" ? "普通模式" : s.ui_mode === "advanced" ? "开发者模式" : "";
       show("home");
     }
-  } catch (err) { warn("加载设置失败: " + err); }
+  } catch (err) { console.error(err); }
 }
-async function chooseMode(mode) {
-  try { window.location.href = (await api("/api/choose_mode", "POST", { mode: mode })).url; }
-  catch (err) { warn("启动失败: " + err); }
-}
-async function openMode(mode) {
-  try { window.location.href = (await api("/api/open_mode", "POST", { mode: mode })).url; }
-  catch (err) { warn("启动失败: " + err); }
-}
-async function resetMode() {
-  try { await api("/api/reset_mode", "POST"); window.location.href = "/?r=" + Date.now(); }
-  catch (err) { warn("重置失败: " + err); }
-}
+async function chooseMode(mode) { try { window.location.href = (await api("/api/choose_mode", "POST", { mode: mode })).url; } catch (err) { alert(err); } }
+async function openMode(mode) { try { window.location.href = (await api("/api/open_mode", "POST", { mode: mode })).url; } catch (err) { alert(err); } }
+async function resetMode() { try { await api("/api/reset_mode", "POST"); window.location.href = "/?r=" + Date.now(); } catch (err) { alert(err); } }
 window.addEventListener("load", init);
 </script>
-</body>
-</html>
-"""
+</body></html>
+""".replace("__CSS__", SHARED_CSS)
 
 # ----------------------------------------------------------------------
 # Service manager
 # ----------------------------------------------------------------------
-
-MODE_DEFAULT_PORTS = {
-    "simple": 8310,
-    "advanced": 8320,
-    "settings": 8330,
-}
+MODE_DEFAULT_PORTS = {"simple": 8310, "advanced": 8320, "settings": 8330}
 
 class ServiceManager:
     def __init__(self, portal_url: str):
@@ -209,11 +171,10 @@ class ServiceManager:
         self.services: Dict[str, Dict[str, Any]] = {}
 
     def _create_app(self, mode: str) -> Tuple[FastAPI, str]:
-        # 传递 Portal URL 给子应用，以便它们能生成“返回首页”的链接
+        # 将 portal_url 注入到环境变量，供子应用读取
         os.environ["AGL_PORTAL_URL"] = self.portal_url
 
         if mode == "simple":
-            from phase_ui1_simple import create_simple_app
             return create_simple_app(), "/"
 
         if mode == "advanced":
@@ -237,12 +198,11 @@ class ServiceManager:
         if existing is not None:
             server = existing.get("server")
             thread = existing.get("thread")
-            if server is not None and thread is not None and thread.is_alive() and not getattr(server, "should_exit", False):
+            if server and thread and thread.is_alive() and not getattr(server, "should_exit", False):
                 return existing["url"]
 
         app, suffix = self._create_app(mode)
         port = resolve_port(MODE_DEFAULT_PORTS.get(mode, 8400))
-
         server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning"))
         thread = threading.Thread(target=server.run, daemon=True)
         thread.start()
@@ -257,17 +217,14 @@ class ServiceManager:
 
     def stop_all(self) -> None:
         for info in self.services.values():
-            if info.get("server") is not None:
-                info["server"].should_exit = True
+            if info.get("server"): info["server"].should_exit = True
         for info in self.services.values():
-            if info.get("thread") is not None:
-                info["thread"].join(timeout=2)
+            if info.get("thread"): info["thread"].join(timeout=2)
         self.services.clear()
 
 # ----------------------------------------------------------------------
 # Portal app
 # ----------------------------------------------------------------------
-
 class ModeRequest(BaseModel):
     mode: str
 
@@ -279,20 +236,17 @@ def create_portal_app(services: ServiceManager) -> FastAPI:
         return PORTAL_PAGE
 
     @app.get("/api/settings")
-    def api_settings():
-        return load_user_settings()
+    def api_settings(): return load_user_settings()
 
     @app.post("/api/choose_mode")
     def api_choose_mode(body: ModeRequest):
-        if body.mode not in {"simple", "advanced"}:
-            raise HTTPException(status_code=400, detail="Invalid mode.")
+        if body.mode not in {"simple", "advanced"}: raise HTTPException(400, "Invalid mode.")
         set_ui_mode(body.mode)
         return {"url": services.start(body.mode)}
 
     @app.post("/api/open_mode")
     def api_open_mode(body: ModeRequest):
-        if body.mode not in {"simple", "advanced", "settings"}:
-            raise HTTPException(status_code=400, detail="Invalid mode.")
+        if body.mode not in {"simple", "advanced", "settings"}: raise HTTPException(400, "Invalid mode.")
         if body.mode in {"simple", "advanced"}:
             s = load_user_settings()
             s["ui_mode"] = body.mode
@@ -310,7 +264,6 @@ def create_portal_app(services: ServiceManager) -> FastAPI:
 # ----------------------------------------------------------------------
 # Main
 # ----------------------------------------------------------------------
-
 def main() -> None:
     parser = argparse.ArgumentParser(description="UI Phase 3 launcher")
     parser.add_argument("--portal-port", type=int, default=8300)
@@ -341,8 +294,7 @@ def main() -> None:
     else:
         print("Browser mode. Ctrl+C to stop.")
         try:
-            while True:
-                time.sleep(1)
+            while True: time.sleep(1)
         except KeyboardInterrupt:
             services.stop_all()
             portal_server.should_exit = True
