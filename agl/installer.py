@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from .project import ProjectStore
+from .io_utils import atomic_write_text
 
 
 def _now_iso() -> str:
@@ -29,6 +30,33 @@ def sha256_file(path: Path | str) -> str:
             h.update(chunk)
 
     return h.hexdigest()
+
+
+def _resolve_inside(root: Path | str, relative_path: str, label: str) -> Path:
+    """Resolve a manifest path and require it to stay below ``root``.
+
+    Patch and backup manifests are data files and may have been created by an
+    older version or another tool. Treat every path in them as untrusted even
+    when the surrounding project directory is local.
+    """
+    if not isinstance(relative_path, str) or not relative_path.strip():
+        raise ValueError(f"Invalid {label} path in manifest.")
+
+    relative = Path(relative_path)
+    if relative.is_absolute():
+        raise ValueError(f"Unsafe absolute {label} path: {relative_path}")
+
+    resolved_root = Path(root).resolve()
+    resolved = (resolved_root / relative).resolve()
+    try:
+        resolved.relative_to(resolved_root)
+    except ValueError as exc:
+        raise ValueError(
+            f"Unsafe {label} path outside the allowed directory: {relative_path}"
+        ) from exc
+    if resolved == resolved_root:
+        raise ValueError(f"Invalid {label} file path: {relative_path}")
+    return resolved
 
 
 # ----------------------------------------------------------------------
@@ -65,51 +93,59 @@ def verify_patch(
     patch_dir = Path(patch_dir)
     game_root = Path(game_root)
 
-    issues: List[str] = []
+    integrity_issues: List[str] = []
+    original_issues: List[str] = []
 
     for item in manifest.get("files", []):
         original_rel = item.get("original_path") or item.get("patched_path")
         patch_rel = item.get("patched_path") or item.get("original_path")
 
         if not original_rel or not patch_rel:
-            issues.append("Manifest item missing original_path/patched_path.")
+            integrity_issues.append("Manifest item missing original_path/patched_path.")
             continue
 
-        patched_file = patch_dir / patch_rel
-        original_file = game_root / original_rel
+        patched_file = _resolve_inside(patch_dir, patch_rel, "patched file")
+        original_file = _resolve_inside(game_root, original_rel, "game file")
 
         if not patched_file.exists():
-            issues.append(f"Missing patched file: {patch_rel}")
+            integrity_issues.append(f"Missing patched file: {patch_rel}")
             continue
 
         expected_patched_sha = item.get("patched_sha256")
         if expected_patched_sha:
             actual_patched_sha = sha256_file(patched_file)
             if actual_patched_sha != expected_patched_sha:
-                issues.append(
+                integrity_issues.append(
                     f"Patched file hash mismatch: {patch_rel}"
                 )
 
         expected_original_sha = item.get("original_sha256")
         if expected_original_sha:
             if not original_file.exists():
-                issues.append(
+                original_issues.append(
                     f"Original file missing but expected: {original_rel}"
                 )
             else:
                 actual_original_sha = sha256_file(original_file)
                 if actual_original_sha != expected_original_sha:
-                    issues.append(
+                    original_issues.append(
                         f"Original file hash mismatch: {original_rel}. "
                         "Game files may have changed since patch creation."
                     )
+        elif "original_sha256" in item and original_file.exists():
+            original_issues.append(
+                f"Original file now exists but patch expected a new file: {original_rel}."
+            )
 
-    if issues and not force:
+    # --force may intentionally accept a changed game version, but it must
+    # never install an incomplete or tampered patch payload.
+    blocking_issues = integrity_issues + ([] if force else original_issues)
+    if blocking_issues:
         raise RuntimeError(
-            "Patch verification failed:\n  - " + "\n  - ".join(issues)
+            "Patch verification failed:\n  - " + "\n  - ".join(blocking_issues)
         )
 
-    return issues
+    return integrity_issues + original_issues
 
 
 # ----------------------------------------------------------------------
@@ -149,16 +185,17 @@ def create_backup(
         if not rel_path:
             continue
 
-        original_file = game_root / rel_path
+        original_file = _resolve_inside(game_root, rel_path, "game file")
 
         record = {
             "game_path": rel_path,
             "backup_path": rel_path,
             "existed_before": original_file.exists(),
+            "installed_sha256": item.get("patched_sha256"),
         }
 
         if original_file.exists():
-            backup_file = backup_dir / rel_path
+            backup_file = _resolve_inside(backup_dir, rel_path, "backup file")
             backup_file.parent.mkdir(parents=True, exist_ok=True)
 
             shutil.copy2(original_file, backup_file)
@@ -175,9 +212,9 @@ def create_backup(
         "files": files,
     }
 
-    (backup_dir / "manifest.json").write_text(
+    atomic_write_text(
+        backup_dir / "manifest.json",
         json.dumps(backup_manifest, ensure_ascii=False, indent=2),
-        encoding="utf-8",
     )
 
     return backup_id, backup_dir
@@ -259,23 +296,42 @@ def install_patch(
 
     installed: List[str] = []
 
-    for item in manifest.get("files", []):
-        original_rel = item.get("original_path") or item.get("patched_path")
-        patch_rel = item.get("patched_path") or item.get("original_path")
+    try:
+        for item in manifest.get("files", []):
+            original_rel = item.get("original_path") or item.get("patched_path")
+            patch_rel = item.get("patched_path") or item.get("original_path")
 
-        if not original_rel or not patch_rel:
-            continue
+            if not original_rel or not patch_rel:
+                continue
 
-        source_file = patch_dir / patch_rel
-        target_file = game_root / original_rel
+            source_file = _resolve_inside(patch_dir, patch_rel, "patched file")
+            target_file = _resolve_inside(game_root, original_rel, "game file")
 
-        if not source_file.exists():
-            continue
+            if not source_file.exists():
+                continue
 
-        target_file.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(source_file, target_file)
+            target_file.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source_file, target_file)
 
-        installed.append(original_rel)
+            installed.append(original_rel)
+    except Exception as install_error:
+        if backup_id is None:
+            raise
+        try:
+            rollback(
+                project_dir=project_dir,
+                backup_id=backup_id,
+                game_root=game_root,
+                force=True,
+            )
+        except Exception as rollback_error:
+            raise RuntimeError(
+                "Patch installation failed and automatic rollback also failed. "
+                f"Install error: {install_error}; rollback error: {rollback_error}"
+            ) from install_error
+        raise RuntimeError(
+            f"Patch installation failed; original files were restored: {install_error}"
+        ) from install_error
 
     project_dir.mkdir(parents=True, exist_ok=True)
 
@@ -287,9 +343,9 @@ def install_patch(
         "files": installed,
     }
 
-    (project_dir / "last_install.json").write_text(
+    atomic_write_text(
+        project_dir / "last_install.json",
         json.dumps(last_install, ensure_ascii=False, indent=2),
-        encoding="utf-8",
     )
 
     return backup_id, installed
@@ -326,7 +382,8 @@ def rollback(
 
         backup_id = backups[0]["backup_id"]
 
-    backup_dir = project_dir / "backups" / backup_id
+    backups_root = project_dir / "backups"
+    backup_dir = _resolve_inside(backups_root, backup_id, "backup")
     manifest_path = backup_dir / "manifest.json"
 
     if not manifest_path.exists():
@@ -345,10 +402,25 @@ def rollback(
         if not rel_path:
             continue
 
-        target_file = game_root / rel_path
+        target_file = _resolve_inside(game_root, rel_path, "game file")
+        installed_sha = item.get("installed_sha256")
+        if not force and installed_sha:
+            if not target_file.exists():
+                raise RuntimeError(
+                    f"Cannot safely rollback; installed file is missing: {rel_path}"
+                )
+            if sha256_file(target_file) != installed_sha:
+                raise RuntimeError(
+                    f"Cannot safely rollback; installed file changed: {rel_path}. "
+                    "Use force only after reviewing the file."
+                )
 
         if item.get("existed_before"):
-            backup_file = backup_dir / item.get("backup_path", rel_path)
+            backup_file = _resolve_inside(
+                backup_dir,
+                item.get("backup_path", rel_path),
+                "backup file",
+            )
 
             if not backup_file.exists():
                 raise FileNotFoundError(

@@ -11,6 +11,7 @@ user_settings.json
 projects/
 patches/
 backups/
+local_test_games/
 .cache/
 *.db
 *.sqlite

@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any, Dict
 
 from .workspace import app_root
+from .io_utils import atomic_write_text
 
 
 DEFAULT_SETTINGS: Dict[str, Any] = {
@@ -39,9 +40,9 @@ def save_user_settings(settings: Dict[str, Any]) -> None:
     merged.update(settings)
 
     path = user_settings_path()
-    path.write_text(
+    atomic_write_text(
+        path,
         json.dumps(merged, ensure_ascii=False, indent=2),
-        encoding="utf-8",
     )
 
 

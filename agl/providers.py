@@ -14,6 +14,10 @@ class TranslationProviderError(RuntimeError):
     pass
 
 
+class _RetryableProviderError(TranslationProviderError):
+    """Internal marker for failures that may succeed on a later attempt."""
+
+
 class TranslationProvider(ABC):
     id: str = "base"
     model: str = "base"
@@ -73,16 +77,18 @@ class OpenAICompatibleProvider(TranslationProvider):
             )
 
         api_key = self.config.api_key
-        if not api_key:
+        if not api_key and not self.config.is_local_endpoint:
             raise TranslationProviderError(
                 f"Missing API key for provider '{self.id}'. "
                 f"Set environment variable: {self.config.api_key_env}"
             )
 
-        return {
+        headers = {
             "Content-Type": "application/json",
-            "Authorization": f"Bearer {api_key}",
         }
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+        return headers
 
     def _system_prompt(self, target_language: str) -> str:
         return (
@@ -165,27 +171,50 @@ class OpenAICompatibleProvider(TranslationProvider):
                     timeout=self.config.timeout_seconds,
                 )
 
-                if response.status_code in {408, 429, 500, 502, 503, 504}:
+                if response.status_code == 429 and "quota" in response.text.lower() and any(
+                    word in response.text.lower() for word in ("exceed", "exhaust", "billing")
+                ):
                     raise TranslationProviderError(
+                        "HTTP 429: 当前 Provider 的 API 配额已用尽或需要检查账单设置。"
+                        "已停止本次自动翻译；可稍后重试或在 Entries 选择其他已就绪的 Provider。"
+                    )
+                if response.status_code in {408, 429, 500, 502, 503, 504}:
+                    raise _RetryableProviderError(
                         f"HTTP {response.status_code}: {response.text[:200]}"
                     )
 
-                response.raise_for_status()
+                try:
+                    response.raise_for_status()
+                except requests.HTTPError as exc:
+                    raise TranslationProviderError(
+                        f"HTTP {response.status_code}: {response.text[:200]}"
+                    ) from exc
 
                 data = response.json()
 
-                return data["choices"][0]["message"]["content"].strip()
+                content = data["choices"][0]["message"]["content"]
+                if not isinstance(content, str) or not content.strip():
+                    raise ValueError("message content must be a non-empty string")
+                return content.strip()
 
-            except TranslationProviderError as exc:
+            except _RetryableProviderError as exc:
                 last_error = exc
 
-            except requests.RequestException as exc:
+            except TranslationProviderError:
+                raise
+
+            except (requests.ConnectionError, requests.Timeout) as exc:
                 last_error = exc
 
-            except (KeyError, IndexError, ValueError) as exc:
+            except (KeyError, IndexError, TypeError, ValueError) as exc:
                 last_error = TranslationProviderError(
                     f"Invalid translation API response: {exc}"
                 )
+
+            except requests.RequestException as exc:
+                raise TranslationProviderError(
+                    f"Translation request failed for provider '{self.id}': {exc}"
+                ) from exc
 
             if attempt < self.config.max_retries:
                 sleep_seconds = self.config.retry_backoff_seconds * (2 ** attempt)

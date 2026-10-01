@@ -7,6 +7,16 @@ cache_db = ".cache/translation.db"
 [providers.mock]
 type = "mock"
 
+[providers.gemini]
+type = "openai_compatible"
+base_url = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
+model = "gemini-3.5-flash-lite"
+api_key_env = "GEMINI_API_KEY"
+timeout_seconds = 60
+max_retries = 3
+retry_backoff_seconds = 1.5
+temperature = 0.2
+
 [providers.nvidia]
 type = "openai_compatible"
 base_url = "https://integrate.api.nvidia.com/v1/chat/completions"
@@ -35,4 +45,14 @@ api_key_env = "OPENROUTER_API_KEY"
 timeout_seconds = 60
 max_retries = 3
 retry_backoff_seconds = 1.5
+temperature = 0.2
+
+[providers.ollama]
+type = "openai_compatible"
+base_url = "http://127.0.0.1:11434/v1/chat/completions"
+model = "qwen2.5:7b"
+api_key_env = ""
+timeout_seconds = 180
+max_retries = 1
+retry_backoff_seconds = 1.0
 temperature = 0.2

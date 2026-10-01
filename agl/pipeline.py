@@ -25,7 +25,7 @@ def translate_one(
     cache_namespace: str = "",
 ) -> str:
     """
-    Phase 0/1 translation pipeline:
+    Translation pipeline:
 
       source_text
         -> cache lookup
@@ -45,6 +45,9 @@ def translate_one(
         return ""
 
     if use_cache:
+        reviewed = cache.get_human_reviewed(original, target_language)
+        if reviewed is not None:
+            return reviewed
         cached = cache.get(
             original,
             target_language,

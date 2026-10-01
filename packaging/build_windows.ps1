@@ -4,7 +4,8 @@ $ErrorActionPreference = "Stop"
 Write-Host "Installing/updating build dependencies..."
 
 python -m pip install --upgrade pip
-python -m pip install pyinstaller fastapi uvicorn requests tomli
+python -m pip install -r requirements.txt
+python -m pip install "pyinstaller>=6,<7"
 
 Write-Host "Building AutoGameLocalizer..."
 
@@ -18,11 +19,13 @@ python -m PyInstaller `
   --collect-all pydantic `
   --collect-all starlette `
   --collect-all anyio `
+  --collect-all keyring `
   --collect-all multipart `
   --collect-all python_multipart `
   --collect-submodules agl `
-  --hidden-import phase75_web `
-  --hidden-import phase8_launcher `
+  --hidden-import agl.api.launcher `
+  --hidden-import agl.api.console `
+  --hidden-import agl.api.project_console `
   app_main.py
 
 Write-Host "Preparing release folder..."
@@ -43,15 +46,17 @@ AutoGame Localizer
 ==================
 
 1. Double click AutoGameLocalizer.exe
-2. Create a project
-3. Open Web Console
-4. Use Scan / Translate / QA / Patch / Install / Rollback
+2. Choose the recommended Player mode
+3. Open Settings and configure a cloud Provider + API key
+4. Choose a supported game folder
+5. Scan, review the estimate, confirm translation, then apply the patch
 
-If you want to use real machine translation:
+The Player workflow never uses mock translations. It asks before sending text
+to the cloud and again before changing game files. A backup is created before
+installation and can be restored from Player mode.
 
-1. Copy .env.example to .env
-2. Put your API key into .env
-3. Never distribute your real .env file
+API keys are stored in Windows Credential Manager when available. Existing .env
+installations remain supported; never distribute a real .env file.
 "@
 
 Set-Content -Path "dist/AutoGameLocalizer/README.txt" -Value $readme -Encoding UTF8

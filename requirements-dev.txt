@@ -1,0 +1,5 @@
+-r requirements.txt
+pytest>=9.0,<10
+httpx2>=2.0,<3
+playwright>=1.52,<2
+pyinstaller>=6.0,<7

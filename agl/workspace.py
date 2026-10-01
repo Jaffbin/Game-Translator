@@ -9,29 +9,30 @@ from typing import Union
 
 def app_root() -> Path:
     """
-    Application root directory.
+    Writable application data directory.
 
     When running from source:
       current working directory
 
-    When running as PyInstaller EXE:
-      folder containing the EXE
-
-    If EXE folder is not writable, fallback to:
-      %USERPROFILE%/AutoGameLocalizer
+    Packaged Windows builds share %LOCALAPPDATA%/AutoGameLocalizer so projects,
+    settings and translation memory survive replacing or moving the EXE.
     """
     if getattr(sys, "frozen", False):
-        exe_dir = Path(sys.executable).resolve().parent
-
-        try:
-            test_file = exe_dir / ".agl_write_test"
-            test_file.touch()
-            test_file.unlink()
-            return exe_dir
-        except Exception:
-            return Path.home() / "AutoGameLocalizer"
+        if sys.platform == "win32":
+            base = Path(os.getenv("LOCALAPPDATA") or (Path.home() / "AppData" / "Local"))
+            return base / "AutoGameLocalizer"
+        return Path(sys.executable).resolve().parent
 
     return Path.cwd()
+
+
+def secrets_env_path() -> Path:
+    """Keep the .env fallback stable across rebuilt Windows EXE folders."""
+    if getattr(sys, "frozen", False) and sys.platform == "win32":
+        folder = app_root()
+        folder.mkdir(parents=True, exist_ok=True)
+        return folder / ".env"
+    return app_root() / ".env"
 
 
 def _get_root(env_name: str, default: str) -> Path:

@@ -13,9 +13,13 @@ python -m PyInstaller `
   --collect-all pydantic `
   --collect-all starlette `
   --collect-all anyio `
+  --collect-all multipart `
+  --collect-all python_multipart `
+  --collect-all keyring `
   --collect-submodules agl `
-  --hidden-import phase75_web `
-  --hidden-import phase8_launcher `
+  --hidden-import agl.api.launcher `
+  --hidden-import agl.api.console `
+  --hidden-import agl.api.project_console `
   app_main.py
 
 Write-Host "Debug build complete."

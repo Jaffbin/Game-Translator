@@ -2,30 +2,20 @@ from __future__ import annotations
 
 import sys
 
-import phase75_web
-import phase11_workspace
+from agl.api import console, launcher
 
 
 def main() -> None:
+    """Unified desktop entry point.
+
+    No args or launcher flags -> integrated pywebview launcher.
+    A project path as the first positional arg -> preserve direct Console CLI.
     """
-    Unified entry point.
-
-    No arguments:
-      open workspace web home
-
-    With arguments:
-      open web console directly
-
-    Examples:
-
-      AutoGameLocalizer.exe
-      AutoGameLocalizer.exe projects/MyGame_zh
-      AutoGameLocalizer.exe projects/MyGame_zh --port 8000
-    """
-    if len(sys.argv) > 1:
-        phase75_web.main()
+    argv = sys.argv[1:]
+    if argv and not argv[0].startswith("-"):
+        console.main()
     else:
-        phase11_workspace.main()
+        launcher.main()
 
 
 if __name__ == "__main__":

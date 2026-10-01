@@ -2,9 +2,13 @@ from __future__ import annotations
 
 
 import os
+import socket
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from .workspace import app_root
+from urllib.parse import urlparse
+from .workspace import app_root, secrets_env_path
+from .secrets import get_secret
 
 try:
     import tomllib
@@ -61,7 +65,34 @@ class ProviderConfig:
     def api_key(self) -> str:
         if not self.api_key_env:
             return ""
-        return os.getenv(self.api_key_env, "")
+        return get_secret(self.api_key_env) or ""
+
+    @property
+    def is_local_endpoint(self) -> bool:
+        try:
+            return urlparse(self.base_url).hostname in {"127.0.0.1", "localhost", "::1"}
+        except ValueError:
+            return False
+
+    @property
+    def is_ready(self) -> bool:
+        return bool(
+            self.type == "openai_compatible"
+            and self.base_url
+            and self.model
+            and (self.api_key or self.is_local_endpoint)
+        )
+
+    def local_endpoint_reachable(self, timeout_seconds: float = 0.2) -> bool:
+        if not self.is_local_endpoint:
+            return False
+        try:
+            parsed = urlparse(self.base_url)
+            port = parsed.port or (443 if parsed.scheme == "https" else 80)
+            with socket.create_connection((parsed.hostname, port), timeout=timeout_seconds):
+                return True
+        except (OSError, TypeError, ValueError):
+            return False
 
 
 @dataclass
@@ -75,12 +106,18 @@ class AppConfig:
 
     def first_available_provider(self) -> str:
         """
-        Return real provider if API key exists, otherwise fallback to mock.
+        Return a fully configured real provider, otherwise fallback to mock.
         """
-        for provider_id, provider_config in self.providers.items():
-            if provider_id == "mock":
-                continue
-            if provider_config.type != "mock" and provider_config.api_key:
+        ready = [
+            (provider_id, provider)
+            for provider_id, provider in self.providers.items()
+            if provider_id != "mock" and provider.is_ready
+        ]
+        for provider_id, provider in ready:
+            if not provider.is_local_endpoint:
+                return provider_id
+        for provider_id, provider in ready:
+            if provider.is_local_endpoint and provider.local_endpoint_reachable():
                 return provider_id
         return "mock"
 
@@ -90,6 +127,17 @@ def _default_providers() -> dict[str, ProviderConfig]:
         "mock": ProviderConfig(
             id="mock",
             type="mock",
+        ),
+        "gemini": ProviderConfig(
+            id="gemini",
+            type="openai_compatible",
+            base_url="https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+            model="gemini-3.5-flash-lite",
+            api_key_env="GEMINI_API_KEY",
+            timeout_seconds=60,
+            max_retries=3,
+            retry_backoff_seconds=1.5,
+            temperature=0.2,
         ),
         "nvidia": ProviderConfig(
             id="nvidia",
@@ -102,6 +150,16 @@ def _default_providers() -> dict[str, ProviderConfig]:
             retry_backoff_seconds=1.5,
             temperature=0.2,
         ),
+        "ollama": ProviderConfig(
+            id="ollama",
+            type="openai_compatible",
+            base_url="http://127.0.0.1:11434/v1/chat/completions",
+            model="qwen2.5:7b",
+            timeout_seconds=180,
+            max_retries=1,
+            retry_backoff_seconds=1.0,
+            temperature=0.2,
+        ),
     }
 
 
@@ -112,7 +170,7 @@ def load_config(
     """
     Load config from environment and optional config.toml.
 
-    Phase 9 behavior:
+    Runtime behavior:
 
       - .env defaults to app_root()/.env
       - config.toml defaults to app_root()/config.toml
@@ -123,7 +181,7 @@ def load_config(
     root = app_root()
 
     if env_path is None:
-        env_path = root / ".env"
+        env_path = secrets_env_path()
 
     if config_path is None:
         candidates = [
@@ -137,12 +195,25 @@ def load_config(
         )
 
     load_dotenv(env_path)
+    if getattr(sys, "frozen", False):
+        # Read existing per-build fallback secrets during migration, without
+        # copying them into a release or overriding the stable user secret.
+        legacy_env = Path(sys.executable).resolve().parent / ".env"
+        if legacy_env != Path(env_path):
+            load_dotenv(legacy_env)
 
-    providers = _default_providers()
     target_language = "zh-CN"
     cache_db = root / ".cache" / "translation.db"
 
     config_file = Path(config_path)
+    # A real configuration file is authoritative. Starting with every built-in
+    # preset here would silently resurrect a provider after the user deleted it
+    # in Settings. Defaults are only used when no configuration exists.
+    providers = (
+        _default_providers()
+        if not config_file.exists()
+        else {"mock": ProviderConfig(id="mock", type="mock")}
+    )
 
     if config_file.exists():
         if tomllib is None:
@@ -184,6 +255,12 @@ def load_config(
 
     if "mock" not in providers:
         providers["mock"] = ProviderConfig(id="mock", type="mock")
+
+    # Load configured provider secrets from the Windows credential vault.  The
+    # legacy .env loader runs first so existing installations remain compatible.
+    for provider_config in providers.values():
+        if provider_config.api_key_env:
+            get_secret(provider_config.api_key_env)
 
     return AppConfig(
         target_language=target_language,

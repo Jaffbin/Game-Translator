@@ -3,8 +3,10 @@ from __future__ import annotations
 import copy
 import os
 import re
+import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+from urllib.parse import urlparse
 
 try:
     import tomllib
@@ -14,9 +16,11 @@ except ModuleNotFoundError:
     except ModuleNotFoundError:
         tomllib = None
 
-from .config import ProviderConfig
+from .config import ProviderConfig, load_dotenv
 from .providers import create_provider
-from .workspace import app_root
+from .workspace import app_root, secrets_env_path
+from .secrets import get_secret, set_secret
+from .io_utils import atomic_write_text
 
 
 DEFAULT_CONFIG_DATA: Dict[str, Any] = {
@@ -30,6 +34,16 @@ DEFAULT_CONFIG_DATA: Dict[str, Any] = {
         "mock": {
             "type": "mock",
         },
+        "gemini": {
+            "type": "openai_compatible",
+            "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+            "model": "gemini-3.5-flash-lite",
+            "api_key_env": "GEMINI_API_KEY",
+            "timeout_seconds": 60,
+            "max_retries": 3,
+            "retry_backoff_seconds": 1.5,
+            "temperature": 0.2,
+        },
         "nvidia": {
             "type": "openai_compatible",
             "base_url": "https://integrate.api.nvidia.com/v1/chat/completions",
@@ -38,6 +52,16 @@ DEFAULT_CONFIG_DATA: Dict[str, Any] = {
             "timeout_seconds": 60,
             "max_retries": 3,
             "retry_backoff_seconds": 1.5,
+            "temperature": 0.2,
+        },
+        "ollama": {
+            "type": "openai_compatible",
+            "base_url": "http://127.0.0.1:11434/v1/chat/completions",
+            "model": "qwen2.5:7b",
+            "api_key_env": "",
+            "timeout_seconds": 180,
+            "max_retries": 1,
+            "retry_backoff_seconds": 1.0,
             "temperature": 0.2,
         },
     },
@@ -57,7 +81,15 @@ def config_path() -> Path:
 
 
 def env_path() -> Path:
-    return app_root() / ".env"
+    return secrets_env_path()
+
+
+def _load_env_fallbacks() -> None:
+    load_dotenv(env_path())
+    if getattr(sys, "frozen", False):
+        legacy = Path(sys.executable).resolve().parent / ".env"
+        if legacy != env_path():
+            load_dotenv(legacy)
 
 
 def effective_config_path() -> Optional[Path]:
@@ -176,7 +208,7 @@ def save_config_data(data: Dict[str, Any]) -> Path:
     text = _render_toml(data)
     path = config_path()
 
-    path.write_text(text, encoding="utf-8")
+    atomic_write_text(path, text)
 
     return path
 
@@ -186,6 +218,7 @@ def save_config_data(data: Dict[str, Any]) -> Path:
 # ----------------------------------------------------------------------
 
 def get_public_settings() -> Dict[str, Any]:
+    _load_env_fallbacks()
     data = read_config_data()
 
     providers_public: Dict[str, Any] = {}
@@ -196,13 +229,27 @@ def get_public_settings() -> Dict[str, Any]:
 
         api_key_env = provider_data.get("api_key_env", "")
 
-        has_api_key = bool(
-            api_key_env and os.getenv(api_key_env)
-        )
+        has_api_key = bool(api_key_env and get_secret(api_key_env))
+        base_url = str(provider_data.get("base_url", ""))
+        try:
+            is_local = urlparse(base_url).hostname in {"127.0.0.1", "localhost", "::1"}
+        except ValueError:
+            is_local = False
+        local_available = False
+        if is_local:
+            local_available = ProviderConfig(
+                id=provider_id,
+                type=str(provider_data.get("type", "openai_compatible")),
+                base_url=base_url,
+                model=str(provider_data.get("model", "")),
+            ).local_endpoint_reachable()
 
         providers_public[provider_id] = {
             **provider_data,
             "has_api_key": has_api_key,
+            "is_local": is_local,
+            "is_available": local_available if is_local else has_api_key,
+            "requires_api_key": provider_data.get("type") != "mock" and not is_local,
         }
 
     return {
@@ -268,6 +315,10 @@ def upsert_provider(provider: Dict[str, Any]) -> Dict[str, Any]:
         if not base_url:
             raise ValueError("base_url is required for openai_compatible provider.")
 
+        parsed_url = urlparse(base_url)
+        if parsed_url.scheme not in {"http", "https"} or not parsed_url.netloc:
+            raise ValueError("base_url must be a valid http:// or https:// URL.")
+
         if not model:
             raise ValueError("model is required for openai_compatible provider.")
 
@@ -292,6 +343,15 @@ def upsert_provider(provider: Dict[str, Any]) -> Dict[str, Any]:
             temperature = float(provider.get("temperature", 0.2))
         except Exception:
             temperature = 0.2
+
+        if not 1 <= timeout_seconds <= 600:
+            raise ValueError("timeout_seconds must be between 1 and 600.")
+        if not 0 <= max_retries <= 10:
+            raise ValueError("max_retries must be between 0 and 10.")
+        if not 0 <= retry_backoff_seconds <= 60:
+            raise ValueError("retry_backoff_seconds must be between 0 and 60.")
+        if not 0 <= temperature <= 2:
+            raise ValueError("temperature must be between 0 and 2.")
 
         entry.update(
             {
@@ -349,6 +409,7 @@ def _env_quote(value: str) -> str:
 
 
 def list_env_keys() -> List[Dict[str, Any]]:
+    _load_env_fallbacks()
     data = read_config_data()
 
     keys: List[str] = []
@@ -368,7 +429,7 @@ def list_env_keys() -> List[Dict[str, Any]]:
         items.append(
             {
                 "key": key,
-                "has_value": bool(os.getenv(key)),
+                "has_value": bool(get_secret(key)),
             }
         )
 
@@ -382,6 +443,11 @@ def save_env_variable(key: str, value: str) -> None:
         raise ValueError(
             "Environment variable name must match ^[A-Z][A-Z0-9_]*$"
         )
+
+    # Prefer the OS credential vault.  Fall back to the legacy .env file only
+    # when keyring is unavailable, preserving source-checkout compatibility.
+    if set_secret(key, value):
+        return
 
     path = env_path()
 
@@ -403,7 +469,7 @@ def save_env_variable(key: str, value: str) -> None:
     if not replaced:
         lines.append(new_line)
 
-    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    atomic_write_text(path, "\n".join(lines) + "\n")
 
 
 # ----------------------------------------------------------------------
@@ -412,6 +478,9 @@ def save_env_variable(key: str, value: str) -> None:
 
 def test_provider(provider_id: str) -> Dict[str, Any]:
     provider_id = provider_id.strip()
+    # The Settings test can run before load_config(), so load the documented
+    # local fallback when Windows Credential Manager is unavailable.
+    _load_env_fallbacks()
 
     data = read_config_data()
 

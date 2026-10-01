@@ -35,8 +35,10 @@ class TranslationMemory:
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
 
-        self.conn = sqlite3.connect(str(self.db_path))
+        self.conn = sqlite3.connect(str(self.db_path), timeout=30.0)
         self.conn.row_factory = sqlite3.Row
+        self.conn.execute("PRAGMA busy_timeout = 30000")
+        self.conn.execute("PRAGMA journal_mode = WAL")
         self._closed = False
 
         self._init_schema()
@@ -77,6 +79,78 @@ class TranslationMemory:
         )
         row = cursor.fetchone()
         return row["translated_text"] if row else None
+
+    def get_exact_any(
+        self,
+        source_text: str,
+        target_language: str,
+        prefer_human_reviewed: bool = True,
+    ) -> Optional[dict]:
+        """Return the most recently updated exact source/target-language memory item."""
+        order = "human_reviewed DESC, updated_at DESC" if prefer_human_reviewed else "updated_at DESC"
+        cursor = self.conn.execute(
+            f"""
+            SELECT source_text, target_language, translated_text, provider, model,
+                   human_reviewed, updated_at
+            FROM translation_cache
+            WHERE source_text = ? AND target_language = ?
+            ORDER BY {order}
+            LIMIT 1
+            """,
+            ((source_text or "").strip(), target_language or ""),
+        )
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
+    def get_human_reviewed(
+        self,
+        source_text: str,
+        target_language: str,
+    ) -> Optional[str]:
+        cursor = self.conn.execute(
+            """
+            SELECT translated_text
+            FROM translation_cache
+            WHERE source_text = ? AND target_language = ? AND human_reviewed = 1
+            ORDER BY updated_at DESC
+            LIMIT 1
+            """,
+            ((source_text or "").strip(), target_language or ""),
+        )
+        row = cursor.fetchone()
+        return row["translated_text"] if row else None
+
+    def search(
+        self,
+        query: str = "",
+        target_language: str = "",
+        limit: int = 50,
+    ) -> list[dict]:
+        """Search recent translation memory entries without exposing cache hashes."""
+        query = (query or "").strip()
+        limit = max(1, min(int(limit), 200))
+        clauses = []
+        params = []
+        if query:
+            like = f"%{query}%"
+            clauses.append("(source_text LIKE ? OR translated_text LIKE ?)")
+            params.extend([like, like])
+        if target_language:
+            clauses.append("target_language = ?")
+            params.append(target_language)
+        where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+        cursor = self.conn.execute(
+            f"""
+            SELECT source_text, target_language, translated_text, provider, model,
+                   human_reviewed, updated_at
+            FROM translation_cache
+            {where}
+            ORDER BY human_reviewed DESC, updated_at DESC
+            LIMIT ?
+            """,
+            (*params, limit),
+        )
+        return [dict(row) for row in cursor.fetchall()]
 
     def put(
         self,

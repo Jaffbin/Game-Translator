@@ -16,6 +16,24 @@ NEW_LINE_RE = re.compile(
     r'^(\s*new\s+)"((?:\\.|[^"\\])*)"(.*)$'
 )
 
+TRANSLATE_BLOCK_RE = re.compile(
+    r'^(?P<indent>\s*)translate\s+[A-Za-z_]\w*\s+'
+    r'(?P<label>[A-Za-z_]\w*)\s*:\s*(?:#.*)?$'
+)
+
+# Generated Ren'Py translation files keep the source dialogue as a comment and
+# put the translated dialogue directly below it.  Limit the prefix to Ren'Py
+# identifiers so Python expressions and other executable statements are never
+# treated as editable text.
+DIALOGUE_LINE_RE = re.compile(
+    r'^(?P<indent>\s*)'
+    r'(?:(?P<prefix>[A-Za-z_]\w*(?:\s+[A-Za-z_]\w*)*)\s+)?'
+    r'"(?P<text>(?:\\.|[^"\\])*)"'
+    r'(?P<suffix>\s*(?:\([^#\r\n]*\))?\s*(?:#.*)?)$'
+)
+
+COMMENT_RE = re.compile(r'^(?P<indent>\s*)#\s?(?P<body>.*)$')
+
 
 def _unescape_renpy(text: str) -> str:
     """
@@ -77,7 +95,7 @@ class RenPyHandler(EngineHandler):
     """
     Ren'Py handler.
 
-    Phase 3 strategy:
+    Ren'Py extraction strategy:
       - Prefer existing Ren'Py translation templates.
       - Extract old/new pairs.
       - Translate old text.
@@ -174,7 +192,7 @@ class RenPyHandler(EngineHandler):
             text = path.read_text(encoding="utf-8-sig")
         except Exception as exc:
             print(f"[WARN] Failed to read Ren'Py file {rel_path}: {exc}")
-            return []
+            raise
 
         lines = text.splitlines()
 
@@ -182,8 +200,27 @@ class RenPyHandler(EngineHandler):
         seen: Set[str] = set()
 
         pending_old: Optional[Tuple[int, str, str]] = None
+        translate_indent: Optional[int] = None
+        pending_dialogue: Optional[Tuple[int, str, str]] = None
 
         for line_number, line in enumerate(lines, start=1):
+            block_match = TRANSLATE_BLOCK_RE.match(line)
+            if block_match:
+                # The special strings block is handled by old/new parsing.
+                translate_indent = (
+                    None
+                    if block_match.group("label") == "strings"
+                    else len(block_match.group("indent"))
+                )
+                pending_dialogue = None
+            elif (
+                translate_indent is not None
+                and line.strip()
+                and len(line) - len(line.lstrip()) <= translate_indent
+            ):
+                translate_indent = None
+                pending_dialogue = None
+
             old_match = OLD_LINE_RE.match(line)
 
             if old_match:
@@ -250,8 +287,78 @@ class RenPyHandler(EngineHandler):
                 pending_old = None
                 continue
 
-            # We intentionally keep pending_old across blank lines/comments,
-            # but another old statement will overwrite it.
+            if pending_old is not None and line.strip() and not line.lstrip().startswith("#"):
+                # Only comments and blank lines may separate an old/new pair.
+                pending_old = None
+
+            if translate_indent is None:
+                continue
+
+            comment_match = COMMENT_RE.match(line)
+            if comment_match:
+                source_match = DIALOGUE_LINE_RE.match(comment_match.group("body"))
+                if source_match:
+                    source_text = _unescape_renpy(source_match.group("text"))
+                    if source_text.strip():
+                        pending_dialogue = (
+                            line_number,
+                            source_match.group("prefix") or "",
+                            source_text,
+                        )
+                continue
+
+            if not line.strip():
+                continue
+
+            target_match = DIALOGUE_LINE_RE.match(line)
+            if target_match and pending_dialogue is not None:
+                source_line, source_prefix, source_text = pending_dialogue
+                target_prefix = target_match.group("prefix") or ""
+
+                # A matching speaker/expression prefix is a strong signal that
+                # this is the generated target for the commented source line.
+                if source_prefix == target_prefix:
+                    target_text = _unescape_renpy(target_match.group("text"))
+                    if not target_text.strip():
+                        target_text = None
+
+                    location = {
+                        "type": "renpy_dialogue_pair",
+                        "source_line": source_line,
+                        "target_line": line_number,
+                    }
+                    entry_id = make_entry_id(
+                        engine=self.engine_id,
+                        file_path=rel_path,
+                        location=location,
+                        source_text=source_text,
+                    )
+
+                    if entry_id not in seen:
+                        seen.add(entry_id)
+                        entries.append(
+                            TranslationEntry(
+                                id=entry_id,
+                                source_text=source_text,
+                                target_text=target_text,
+                                context=f"{rel_path}:{source_line}->{line_number}",
+                                file_path=rel_path,
+                                engine=self.engine_id,
+                                location=location,
+                                status=(
+                                    EntryStatus.REVIEWED
+                                    if target_text is not None
+                                    else EntryStatus.PENDING
+                                ),
+                                human_reviewed=target_text is not None,
+                            )
+                        )
+
+                pending_dialogue = None
+                continue
+
+            # Any executable statement breaks the source/target pairing.
+            pending_dialogue = None
 
         return entries
 
@@ -269,7 +376,9 @@ class RenPyHandler(EngineHandler):
         target_path = Path(output_path)
 
         try:
-            original_text = source_path.read_text(encoding="utf-8-sig")
+            original_bytes = source_path.read_bytes()
+            has_bom = original_bytes.startswith(b"\xef\xbb\xbf")
+            original_text = original_bytes.decode("utf-8-sig")
         except Exception as exc:
             print(f"[WARN] Failed to read Ren'Py file {file_path}: {exc}")
             return 0
@@ -292,22 +401,27 @@ class RenPyHandler(EngineHandler):
 
             location = entry.location or {}
 
-            if location.get("type") != "renpy_old_new":
+            location_type = location.get("type")
+            if location_type not in {"renpy_old_new", "renpy_dialogue_pair"}:
                 continue
 
-            new_line_number = location.get("new_line")
+            target_line_number = (
+                location.get("new_line")
+                if location_type == "renpy_old_new"
+                else location.get("target_line")
+            )
 
-            if not isinstance(new_line_number, int):
+            if not isinstance(target_line_number, int):
                 continue
 
-            if new_line_number < 1 or new_line_number > len(lines):
+            if target_line_number < 1 or target_line_number > len(lines):
                 print(
-                    f"[WARN] Invalid new_line {new_line_number} "
+                    f"[WARN] Invalid target line {target_line_number} "
                     f"for entry {entry.id}"
                 )
                 continue
 
-            original_line = lines[new_line_number - 1]
+            original_line = lines[target_line_number - 1]
 
             # Separate line ending so regex matching is easier.
             ending = ""
@@ -321,28 +435,45 @@ class RenPyHandler(EngineHandler):
                 ending = "\r" + ending
                 content = content[:-1]
 
-            new_match = NEW_LINE_RE.match(content)
+            target_match = (
+                NEW_LINE_RE.match(content)
+                if location_type == "renpy_old_new"
+                else DIALOGUE_LINE_RE.match(content)
+            )
 
-            if not new_match:
+            if not target_match:
                 print(
-                    f"[WARN] Line {new_line_number} is not a valid "
-                    f"Ren'Py new statement: {content!r}"
+                    f"[WARN] Line {target_line_number} is not a valid "
+                    f"Ren'Py translation target: {content!r}"
                 )
                 continue
 
             escaped_target = _escape_renpy(entry.target_text)
+            if location_type == "renpy_old_new":
+                replacement = (
+                    f'{target_match.group(1)}"{escaped_target}"'
+                    f'{target_match.group(3)}{ending}'
+                )
+            else:
+                prefix = target_match.group("prefix")
+                replacement = target_match.group("indent")
+                if prefix:
+                    replacement += f"{prefix} "
+                replacement += (
+                    f'"{escaped_target}"{target_match.group("suffix")}{ending}'
+                )
 
-            lines[new_line_number - 1] = (
-                f'{new_match.group(1)}"{escaped_target}"{new_match.group(3)}{ending}'
-            )
+            lines[target_line_number - 1] = replacement
 
             changed += 1
 
         target_path.parent.mkdir(parents=True, exist_ok=True)
 
-        target_path.write_text(
-            "".join(lines),
-            encoding="utf-8",
-        )
+        encoded = "".join(lines).encode("utf-8")
+        if has_bom:
+            encoded = b"\xef\xbb\xbf" + encoded
+        # Write bytes so Windows text-mode newline conversion cannot turn
+        # preserved CRLF endings into CRCRLF.
+        target_path.write_bytes(encoded)
 
         return changed

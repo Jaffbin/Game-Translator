@@ -112,6 +112,30 @@ URL_REGEX = re.compile(
 )
 
 
+TEXT_KEY_VALUE_RE = re.compile(
+    r"^(?P<prefix>\s*[A-Za-z_][\w.-]*\s*[=:]\s*)"
+    r"(?P<quote>[\"']?)(?P<value>.*?)(?P=quote)(?P<trailing>\s*)$"
+)
+
+
+CSV_HEADER_NAMES = {
+    "id",
+    "key",
+    "name",
+    "text",
+    "title",
+    "description",
+    "dialog",
+    "dialogue",
+    "message",
+    "source",
+    "target",
+    "translation",
+    "language",
+    "locale",
+}
+
+
 CJK_REGEX = re.compile(
     r"[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]"
 )
@@ -120,13 +144,7 @@ CJK_REGEX = re.compile(
 def _read_text_preserve_bom(path: Path) -> Tuple[str, bool]:
     raw = path.read_bytes()
     has_bom = raw.startswith(b"\xef\xbb\xbf")
-
-    try:
-        text = raw.decode("utf-8-sig")
-    except UnicodeDecodeError:
-        text = raw.decode("utf-8", errors="ignore")
-
-    return text, has_bom
+    return raw.decode("utf-8-sig"), has_bom
 
 
 def _write_text_preserve_bom(
@@ -135,13 +153,12 @@ def _write_text_preserve_bom(
     has_bom: bool,
 ) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-
-    encoding = "utf-8-sig" if has_bom else "utf-8"
-
-    path.write_text(
-        text,
-        encoding=encoding,
-    )
+    encoded = text.encode("utf-8")
+    if has_bom:
+        encoded = b"\xef\xbb\xbf" + encoded
+    # ``text`` may already contain CRLF from the source or CSV writer. Byte
+    # output prevents Windows from expanding each LF a second time.
+    path.write_bytes(encoded)
 
 
 def _to_single_line(text: str) -> str:
@@ -193,7 +210,7 @@ class UnityHandler(EngineHandler):
         if (root / "UnityPlayer.dll").exists():
             return True
 
-        if any(root.glob("*_Data")):
+        if any(path.is_dir() for path in root.glob("*_Data")):
             return True
 
         if (root / "StreamingAssets").is_dir():
@@ -303,6 +320,7 @@ class UnityHandler(EngineHandler):
 
         except Exception as exc:
             print(f"[WARN] Unity extraction failed for {rel_path}: {exc}")
+            raise
 
         return entries
 
@@ -397,6 +415,27 @@ class UnityHandler(EngineHandler):
             if stripped.startswith(("#", "//", ";", "[")):
                 continue
 
+            key_value = TEXT_KEY_VALUE_RE.match(line)
+            if key_value:
+                value = key_value.group("value").strip()
+                if not self._is_translatable_value(value, "text"):
+                    continue
+
+                key = key_value.group("prefix").split("=", 1)[0].split(":", 1)[0].strip()
+                location = {
+                    "type": "unity_text_key_value",
+                    "line": line_number,
+                }
+                self._add_entry(
+                    entries=entries,
+                    seen=seen,
+                    source_text=value,
+                    rel_path=rel_path,
+                    location=location,
+                    context=f"{rel_path}:{line_number} [{key}]",
+                )
+                continue
+
             if not self._is_translatable_value(stripped, "text"):
                 continue
 
@@ -443,9 +482,10 @@ class UnityHandler(EngineHandler):
             )
         )
 
+        has_header = bool(rows and self._looks_like_csv_header(rows[0]))
+
         for row_index, row in enumerate(rows):
-            # Skip header row by default.
-            if row_index == 0:
+            if row_index == 0 and has_header:
                 continue
 
             for col_index, cell in enumerate(row):
@@ -561,6 +601,23 @@ class UnityHandler(EngineHandler):
 
         return False
 
+    def _looks_like_csv_header(self, row: List[str]) -> bool:
+        """Recognize common localization headers without dropping row 1 blindly."""
+        normalized = [cell.strip().lower() for cell in row if cell.strip()]
+        if not normalized:
+            return False
+        known = sum(
+            cell in CSV_HEADER_NAMES
+            or cell.endswith("_text")
+            or cell.endswith("_id")
+            for cell in normalized
+        )
+        identifier_like = sum(
+            bool(re.fullmatch(r"[a-z_][a-z0-9_.-]*", cell))
+            for cell in normalized
+        )
+        return known >= 1 and identifier_like == len(normalized)
+
     # ------------------------------------------------------------------
     # Injection
     # ------------------------------------------------------------------
@@ -669,7 +726,8 @@ class UnityHandler(EngineHandler):
 
             location = entry.location or {}
 
-            if location.get("type") != "unity_text_line":
+            location_type = location.get("type")
+            if location_type not in {"unity_text_line", "unity_text_key_value"}:
                 continue
 
             line_number = location.get("line")
@@ -693,7 +751,24 @@ class UnityHandler(EngineHandler):
                 ending = "\r" + ending
                 content = content[:-1]
 
-            new_content = _to_single_line(entry.target_text)
+            translated = _to_single_line(entry.target_text)
+            if location_type == "unity_text_key_value":
+                key_value = TEXT_KEY_VALUE_RE.match(content)
+                if not key_value:
+                    continue
+                new_content = (
+                    key_value.group("prefix")
+                    + key_value.group("quote")
+                    + translated
+                    + key_value.group("quote")
+                    + key_value.group("trailing")
+                )
+            else:
+                # Keep formatting that may be meaningful to a line-oriented
+                # game format (indentation and deliberate trailing spaces).
+                leading = content[: len(content) - len(content.lstrip())]
+                trailing = content[len(content.rstrip()) :]
+                new_content = leading + translated + trailing
 
             lines[line_number - 1] = new_content + ending
             changed += 1
@@ -771,7 +846,10 @@ class UnityHandler(EngineHandler):
             if col_index < 0 or col_index >= len(row):
                 continue
 
-            row[col_index] = _to_single_line(entry.target_text)
+            original_cell = row[col_index]
+            leading = original_cell[: len(original_cell) - len(original_cell.lstrip())]
+            trailing = original_cell[len(original_cell.rstrip()) :]
+            row[col_index] = leading + _to_single_line(entry.target_text) + trailing
             changed += 1
 
         output = io.StringIO()
